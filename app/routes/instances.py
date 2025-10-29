@@ -96,6 +96,8 @@ async def start_instance(instance_id: str):
     
     success = await process_manager.start_instance(instance_id)
     instance = config_manager.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found after start")
     
     if success:
         return InstanceResponse(
@@ -118,6 +120,8 @@ async def stop_instance(instance_id: str):
     
     success = await process_manager.stop_instance(instance_id)
     instance = config_manager.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found after stop")
     
     if success:
         return InstanceResponse(
@@ -140,6 +144,8 @@ async def restart_instance(instance_id: str):
     
     success = await process_manager.restart_instance(instance_id)
     instance = config_manager.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found after restart")
     
     if success:
         return InstanceResponse(

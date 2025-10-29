@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 from pydantic_settings import BaseSettings
 from app.models import Instance, InstanceStatus
 
@@ -27,7 +27,7 @@ settings = Settings()
 class ConfigManager:
     """Manages instance configurations and persistence"""
     
-    def __init__(self, config_file: str = None):
+    def __init__(self, config_file: Optional[str] = None):
         self.config_file = Path(config_file or settings.config_file)
         self.instances: Dict[str, Instance] = {}
         self.load()
@@ -79,7 +79,7 @@ class ConfigManager:
             del self.instances[instance_id]
             self.save()
     
-    def get_instance(self, instance_id: str) -> Instance:
+    def get_instance(self, instance_id: str) -> Optional[Instance]:
         """Get an instance by ID"""
         return self.instances.get(instance_id)
     

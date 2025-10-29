@@ -68,6 +68,9 @@ class ProcessManager:
     def _read_logs(self, instance_id: str, process: subprocess.Popen, log_file: Path):
         """Read logs from process and store in buffer"""
         try:
+            if not process.stdout:
+                return
+            
             with open(log_file, 'a') as f:
                 for line in iter(process.stdout.readline, b''):
                     if not line:
