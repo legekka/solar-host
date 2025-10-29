@@ -127,7 +127,7 @@ class ProcessManager:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                bufsize=1
+                bufsize=0  # Unbuffered for real-time output
             )
             
             self.processes[instance_id] = process
