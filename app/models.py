@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -37,7 +37,7 @@ class Instance(BaseModel):
     status: InstanceStatus = InstanceStatus.STOPPED
     port: Optional[int] = None
     pid: Optional[int] = None
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     error_message: Optional[str] = None
     retry_count: int = 0

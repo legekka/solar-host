@@ -3,7 +3,7 @@ import socket
 import time
 import uuid
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 from collections import deque
 import asyncio
@@ -151,7 +151,7 @@ class ProcessManager:
                 # Process is running
                 instance.status = InstanceStatus.RUNNING
                 instance.pid = process.pid
-                instance.started_at = datetime.now()
+                instance.started_at = datetime.now(timezone.utc)
                 instance.retry_count = 0
                 config_manager.update_instance(instance_id, instance)
                 return True
