@@ -132,6 +132,23 @@ async def root():
     }
 
 
+@app.get("/memory")
+async def get_memory():
+    """Get GPU/RAM memory usage"""
+    from fastapi import HTTPException
+    from app.memory_monitor import get_memory_info
+    from app.models import MemoryInfo
+    
+    memory_info = get_memory_info()
+    if not memory_info:
+        raise HTTPException(
+            status_code=503,
+            detail="Memory information not available"
+        )
+    
+    return MemoryInfo(**memory_info)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

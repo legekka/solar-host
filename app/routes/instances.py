@@ -3,7 +3,7 @@ from typing import List
 
 from app.models import (
     Instance, InstanceCreate, InstanceUpdate, 
-    InstanceResponse, InstanceStatus, MemoryInfo
+    InstanceResponse, InstanceStatus
 )
 from app.config import config_manager
 from app.process_manager import process_manager
@@ -157,19 +157,4 @@ async def restart_instance(instance_id: str):
             status_code=500,
             detail=f"Failed to restart instance: {instance.error_message}"
         )
-
-
-@router.get("/memory", response_model=MemoryInfo)
-async def get_memory():
-    """Get GPU/RAM memory usage"""
-    from app.memory_monitor import get_memory_info
-    
-    memory_info = get_memory_info()
-    if not memory_info:
-        raise HTTPException(
-            status_code=503,
-            detail="Memory information not available"
-        )
-    
-    return MemoryInfo(**memory_info)
 
