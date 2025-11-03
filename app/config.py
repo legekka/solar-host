@@ -72,6 +72,19 @@ class ConfigManager:
         if instance_id in self.instances:
             self.instances[instance_id] = instance
             self.save()
+
+    def update_instance_runtime(self, instance_id: str, **kwargs):
+        """Update ephemeral runtime fields for an instance (no disk write)"""
+        instance = self.instances.get(instance_id)
+        if not instance:
+            return
+        # Only mutate known runtime fields
+        if "busy" in kwargs:
+            instance.busy = bool(kwargs["busy"])  # type: ignore[attr-defined]
+        if "prefill_progress" in kwargs:
+            instance.prefill_progress = kwargs["prefill_progress"]  # type: ignore[attr-defined]
+        if "active_slots" in kwargs:
+            instance.active_slots = int(kwargs["active_slots"])  # type: ignore[attr-defined]
     
     def remove_instance(self, instance_id: str):
         """Remove an instance"""

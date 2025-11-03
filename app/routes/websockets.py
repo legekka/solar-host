@@ -51,3 +51,52 @@ async def websocket_logs(websocket: WebSocket, instance_id: str):
     finally:
         await websocket.close()
 
+
+@router.websocket("/instances/{instance_id}/state")
+async def websocket_instance_state(websocket: WebSocket, instance_id: str):
+    """Stream runtime state updates for an instance via WebSocket"""
+    await websocket.accept()
+
+    # Validate instance exists
+    instance = config_manager.get_instance(instance_id)
+    if not instance:
+        await websocket.send_json({"error": "Instance not found"})
+        await websocket.close()
+        return
+
+    try:
+        # Send current snapshot immediately
+        from datetime import datetime, timezone
+        snapshot = {
+            "type": "instance_state",
+            "data": {
+                "instance_id": instance_id,
+                "busy": getattr(instance, "busy", False),
+                "prefill_progress": getattr(instance, "prefill_progress", None),
+                "active_slots": getattr(instance, "active_slots", 0),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+        await websocket.send_json(snapshot)
+
+        # Track sequence for incremental updates
+        last_seq = process_manager.get_state_next_sequence(instance_id)
+
+        while True:
+            current_seq = process_manager.get_state_next_sequence(instance_id)
+            if current_seq > last_seq:
+                buffer = process_manager.get_state_buffer(instance_id)
+                for event in buffer:
+                    if event.seq >= last_seq:
+                        await websocket.send_json(event.model_dump())
+                last_seq = current_seq
+
+            await asyncio.sleep(0.1)
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        await websocket.send_json({"error": str(e)})
+    finally:
+        await websocket.close()
+

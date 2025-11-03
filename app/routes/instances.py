@@ -3,7 +3,7 @@ from typing import List
 
 from app.models import (
     Instance, InstanceCreate, InstanceUpdate, 
-    InstanceResponse, InstanceStatus
+    InstanceResponse, InstanceStatus, InstanceRuntimeState
 )
 from app.config import config_manager
 from app.process_manager import process_manager
@@ -157,4 +157,22 @@ async def restart_instance(instance_id: str):
             status_code=500,
             detail=f"Failed to restart instance: {instance.error_message}"
         )
+
+
+@router.get("/{instance_id}/state", response_model=InstanceRuntimeState)
+async def get_instance_state(instance_id: str):
+    """Get ephemeral runtime state for an instance"""
+    instance = config_manager.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    # Build current snapshot (ephemeral values default to safe values)
+    now_iso = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+    return InstanceRuntimeState(
+        instance_id=instance_id,
+        busy=getattr(instance, "busy", False),
+        prefill_progress=getattr(instance, "prefill_progress", None),
+        active_slots=getattr(instance, "active_slots", 0),
+        timestamp=now_iso,
+    )
 

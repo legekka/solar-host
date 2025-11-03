@@ -8,8 +8,16 @@ from typing import Dict, List
 from collections import deque
 import asyncio
 import threading
+import re
 
-from app.models import Instance, InstanceConfig, InstanceStatus, LogMessage
+from app.models import (
+    Instance,
+    InstanceConfig,
+    InstanceStatus,
+    LogMessage,
+    InstanceRuntimeState,
+    InstanceStateEvent,
+)
 from app.config import settings, config_manager
 
 
@@ -23,6 +31,19 @@ class ProcessManager:
         self.log_threads: Dict[str, threading.Thread] = {}
         self.log_dir = Path(settings.log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Runtime state streaming (ephemeral)
+        self.state_buffers: Dict[str, deque] = {}
+        self.state_sequences: Dict[str, int] = {}
+        self.active_slot_ids: Dict[str, set] = {}
+        self.last_runtime: Dict[str, Dict[str, object]] = {}
+
+        # Compile regex patterns for parsing llama-server logs
+        self._re_launch = re.compile(r"slot\s+launch_slot_:\s+id\s+(\d+)\s*\|\s*task\s+(-?\d+)\s*\|\s*processing task")
+        self._re_progress = re.compile(r"prompt processing progress.*progress\s*=\s*([0-9.]+)")
+        self._re_prompt_done = re.compile(r"\|\s*prompt done\b")
+        self._re_release = re.compile(r"slot\s+release:\s+id\s+(\d+)\s*\|\s*task\s+(-?\d+)\s*\|\s*stop processing")
+        self._re_all_idle = re.compile(r"srv\s+update_slots:\s+all slots are idle")
         
     def _is_port_available(self, port: int) -> bool:
         """Check if a port is available"""
@@ -96,8 +117,163 @@ class ProcessManager:
                         line=decoded_line
                     )
                     self.log_buffers[instance_id].append(log_msg)
+
+                    # Update runtime state based on parsed log lines
+                    try:
+                        self._parse_and_update_runtime(instance_id, decoded_line)
+                    except Exception:
+                        # Parsing errors should not break logging
+                        pass
         except Exception as e:
             print(f"Error reading logs for {instance_id}: {e}")
+
+    def _emit_state_if_changed(self, instance_id: str, *, busy: bool, prefill_progress: object, active_slots: int):
+        """Update in-memory runtime and enqueue a state event if any value changed."""
+        # Normalize prefill_progress: ensure float or None
+        pp: object
+        if prefill_progress is None:
+            pp = None
+        else:
+            try:
+                f = float(prefill_progress)  # type: ignore[assignment]
+            except Exception:
+                f = None
+            pp = f
+
+        prev = self.last_runtime.get(instance_id)
+        changed = (
+            prev is None or
+            prev.get("busy") != busy or
+            prev.get("prefill_progress") != pp or
+            prev.get("active_slots") != active_slots
+        )
+
+        # Always update in-memory instance runtime fields
+        config_manager.update_instance_runtime(
+            instance_id,
+            busy=busy,
+            prefill_progress=pp,
+            active_slots=active_slots,
+        )
+
+        if not changed:
+            return
+
+        # Persist last runtime snapshot (ephemeral, in-memory only)
+        self.last_runtime[instance_id] = {
+            "busy": busy,
+            "prefill_progress": pp,
+            "active_slots": active_slots,
+        }
+
+        # Initialize state buffer/seq lazily
+        if instance_id not in self.state_buffers:
+            self.state_buffers[instance_id] = deque(maxlen=settings.log_buffer_size)
+            self.state_sequences[instance_id] = 0
+
+        seq = self.state_sequences[instance_id]
+        self.state_sequences[instance_id] += 1
+
+        now_ts = datetime.now(timezone.utc).isoformat()
+        state = InstanceRuntimeState(
+            instance_id=instance_id,
+            busy=busy,
+            prefill_progress=pp if isinstance(pp, float) or pp is None else None,
+            active_slots=active_slots,
+            timestamp=now_ts,
+        )
+        event = InstanceStateEvent(
+            seq=seq,
+            timestamp=now_ts,
+            data=state,
+        )
+        self.state_buffers[instance_id].append(event)
+
+    def _parse_and_update_runtime(self, instance_id: str, line: str):
+        """Parse a single log line and update runtime state accordingly."""
+        # Ensure active slot set exists
+        slots = self.active_slot_ids.get(instance_id)
+        if slots is None:
+            slots = set()
+            self.active_slot_ids[instance_id] = slots
+
+        # slot launch → add slot, busy true
+        m = self._re_launch.search(line)
+        if m:
+            try:
+                slot_id = int(m.group(1))
+            except Exception:
+                slot_id = -1
+            slots.add(slot_id)
+            self._emit_state_if_changed(
+                instance_id,
+                busy=True,
+                prefill_progress=self.last_runtime.get(instance_id, {}).get("prefill_progress"),
+                active_slots=len(slots),
+            )
+            return
+
+        # prompt processing progress → update progress
+        m = self._re_progress.search(line)
+        if m:
+            try:
+                progress = float(m.group(1))
+            except Exception:
+                progress = None
+            self._emit_state_if_changed(
+                instance_id,
+                busy=True if len(slots) > 0 else (self.last_runtime.get(instance_id, {}).get("busy") is True),
+                prefill_progress=progress,
+                active_slots=len(slots),
+            )
+            return
+
+        # prompt done → set progress to 1.0 (stays until decode or release)
+        if self._re_prompt_done.search(line):
+            self._emit_state_if_changed(
+                instance_id,
+                busy=True if len(slots) > 0 else (self.last_runtime.get(instance_id, {}).get("busy") is True),
+                prefill_progress=1.0,
+                active_slots=len(slots),
+            )
+            return
+
+        # slot release → remove slot; if none remain, clear busy and progress
+        m = self._re_release.search(line)
+        if m:
+            try:
+                slot_id = int(m.group(1))
+            except Exception:
+                slot_id = -1
+            if slot_id in slots:
+                slots.discard(slot_id)
+            if len(slots) == 0:
+                self._emit_state_if_changed(
+                    instance_id,
+                    busy=False,
+                    prefill_progress=None,
+                    active_slots=0,
+                )
+            else:
+                self._emit_state_if_changed(
+                    instance_id,
+                    busy=True,
+                    prefill_progress=self.last_runtime.get(instance_id, {}).get("prefill_progress"),
+                    active_slots=len(slots),
+                )
+            return
+
+        # all slots idle → force clear
+        if self._re_all_idle.search(line):
+            if len(slots) > 0:
+                slots.clear()
+            self._emit_state_if_changed(
+                instance_id,
+                busy=False,
+                prefill_progress=None,
+                active_slots=0,
+            )
+            return
     
     async def start_instance(self, instance_id: str) -> bool:
         """Start a llama-server instance"""
@@ -154,6 +330,17 @@ class ProcessManager:
                 instance.started_at = datetime.now(timezone.utc)
                 instance.retry_count = 0
                 config_manager.update_instance(instance_id, instance)
+
+                # Initialize ephemeral runtime state
+                self.active_slot_ids[instance_id] = set()
+                self.state_buffers[instance_id] = deque(maxlen=settings.log_buffer_size)
+                self.state_sequences[instance_id] = 0
+                self.last_runtime[instance_id] = {
+                    "busy": False,
+                    "prefill_progress": None,
+                    "active_slots": 0,
+                }
+                config_manager.update_instance_runtime(instance_id, busy=False, prefill_progress=None, active_slots=0)
                 return True
             else:
                 # Process failed
@@ -261,6 +448,15 @@ class ProcessManager:
     def get_next_sequence(self, instance_id: str) -> int:
         """Get next sequence number for an instance"""
         return self.log_sequences.get(instance_id, 0)
+
+    # Runtime state buffer accessors
+    def get_state_buffer(self, instance_id: str) -> List[InstanceStateEvent]:
+        if instance_id in self.state_buffers:
+            return list(self.state_buffers[instance_id])
+        return []
+
+    def get_state_next_sequence(self, instance_id: str) -> int:
+        return self.state_sequences.get(instance_id, 0)
     
     async def auto_restart_running_instances(self):
         """Auto-restart instances that were running before shutdown"""

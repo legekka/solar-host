@@ -42,6 +42,11 @@ class Instance(BaseModel):
     error_message: Optional[str] = None
     retry_count: int = 0
 
+    # Ephemeral runtime fields (not persisted to disk)
+    busy: bool = Field(default=False, exclude=True)
+    prefill_progress: Optional[float] = Field(default=None, exclude=True)
+    active_slots: int = Field(default=0, exclude=True)
+
 
 class InstanceCreate(BaseModel):
     """Request to create a new instance"""
@@ -58,6 +63,23 @@ class LogMessage(BaseModel):
     seq: int
     timestamp: str
     line: str
+
+
+class InstanceRuntimeState(BaseModel):
+    """Ephemeral runtime state for an instance"""
+    instance_id: str
+    busy: bool
+    prefill_progress: Optional[float] = None
+    active_slots: int = 0
+    timestamp: str
+
+
+class InstanceStateEvent(BaseModel):
+    """State change event used for WebSocket streaming of runtime state"""
+    seq: int
+    timestamp: str
+    type: str = "instance_state"
+    data: InstanceRuntimeState
 
 
 class InstanceResponse(BaseModel):
