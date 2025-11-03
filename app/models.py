@@ -11,6 +11,12 @@ class InstanceStatus(str, Enum):
     RUNNING = "running"
     FAILED = "failed"
     STOPPING = "stopping"
+class InstancePhase(str, Enum):
+    """Fine-grained runtime phase of an active request"""
+    IDLE = "idle"
+    PREFILL = "prefill"
+    GENERATING = "generating"
+
 
 
 class InstanceConfig(BaseModel):
@@ -69,8 +75,18 @@ class InstanceRuntimeState(BaseModel):
     """Ephemeral runtime state for an instance"""
     instance_id: str
     busy: bool
+    phase: InstancePhase = InstancePhase.IDLE
     prefill_progress: Optional[float] = None
     active_slots: int = 0
+    # Optional contextual metrics
+    slot_id: Optional[int] = None
+    task_id: Optional[int] = None
+    prefill_prompt_tokens: Optional[int] = None
+    generated_tokens: Optional[int] = None
+    decode_tps: Optional[float] = None
+    decode_ms_per_token: Optional[float] = None
+    checkpoint_index: Optional[int] = None
+    checkpoint_total: Optional[int] = None
     timestamp: str
 
 

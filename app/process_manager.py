@@ -17,6 +17,7 @@ from app.models import (
     LogMessage,
     InstanceRuntimeState,
     InstanceStateEvent,
+    InstancePhase,
 )
 from app.config import settings, config_manager
 
@@ -44,6 +45,11 @@ class ProcessManager:
         self._re_prompt_done = re.compile(r"\|\s*prompt done\b")
         self._re_release = re.compile(r"slot\s+release:\s+id\s+(\d+)\s*\|\s*task\s+(-?\d+)\s*\|\s*stop processing")
         self._re_all_idle = re.compile(r"srv\s+update_slots:\s+all slots are idle")
+        self._re_new_prompt = re.compile(r"slot\s+update_slots:\s+id\s+(\d+)\s*\|\s*task\s+(-?\d+)\s*\|\s*new prompt.*task\.n_tokens\s*=\s*(\d+)")
+        self._re_checkpoint = re.compile(r"created context checkpoint\s+(\d+)\s+of\s+(\d+)")
+        self._re_print_timing = re.compile(r"slot\s+print_timing:\s+id\s+(\d+)\s*\|\s*task\s+(-?\d+)\s*\|")
+        self._re_prompt_eval_line = re.compile(r"prompt eval time\s*=\s*([0-9.]+)\s*ms\s*/\s*(\d+)\s*tokens\s*\(\s*([0-9.]+)\s*ms per token,\s*([0-9.]+)\s*tokens per second\)")
+        self._re_decode_eval_line = re.compile(r"\s*eval time\s*=\s*([0-9.]+)\s*ms\s*/\s*(\d+)\s*tokens\s*\(\s*([0-9.]+)\s*ms per token,\s*([0-9.]+)\s*tokens per second\)")
         
     def _is_port_available(self, port: int) -> bool:
         """Check if a port is available"""
@@ -127,7 +133,23 @@ class ProcessManager:
         except Exception as e:
             print(f"Error reading logs for {instance_id}: {e}")
 
-    def _emit_state_if_changed(self, instance_id: str, *, busy: bool, prefill_progress: object, active_slots: int):
+    def _emit_state_if_changed(
+        self,
+        instance_id: str,
+        *,
+        busy: bool,
+        phase: InstancePhase,
+        prefill_progress: object,
+        active_slots: int,
+        slot_id: object = None,
+        task_id: object = None,
+        prefill_prompt_tokens: object = None,
+        generated_tokens: object = None,
+        decode_tps: object = None,
+        decode_ms_per_token: object = None,
+        checkpoint_index: object = None,
+        checkpoint_total: object = None,
+    ):
         """Update in-memory runtime and enqueue a state event if any value changed."""
         # Normalize prefill_progress: ensure float or None
         pp: object
@@ -144,8 +166,17 @@ class ProcessManager:
         changed = (
             prev is None or
             prev.get("busy") != busy or
+            prev.get("phase") != phase.value or
             prev.get("prefill_progress") != pp or
-            prev.get("active_slots") != active_slots
+            prev.get("active_slots") != active_slots or
+            prev.get("slot_id") != (int(slot_id) if slot_id is not None else None) or
+            prev.get("task_id") != (int(task_id) if task_id is not None else None) or
+            prev.get("prefill_prompt_tokens") != (int(prefill_prompt_tokens) if prefill_prompt_tokens is not None else None) or
+            prev.get("generated_tokens") != (int(generated_tokens) if generated_tokens is not None else None) or
+            prev.get("decode_tps") != (float(decode_tps) if decode_tps is not None else None) or
+            prev.get("decode_ms_per_token") != (float(decode_ms_per_token) if decode_ms_per_token is not None else None) or
+            prev.get("checkpoint_index") != (int(checkpoint_index) if checkpoint_index is not None else None) or
+            prev.get("checkpoint_total") != (int(checkpoint_total) if checkpoint_total is not None else None)
         )
 
         # Always update in-memory instance runtime fields
@@ -162,8 +193,17 @@ class ProcessManager:
         # Persist last runtime snapshot (ephemeral, in-memory only)
         self.last_runtime[instance_id] = {
             "busy": busy,
+            "phase": phase.value,
             "prefill_progress": pp,
             "active_slots": active_slots,
+            "slot_id": int(slot_id) if slot_id is not None else None,
+            "task_id": int(task_id) if task_id is not None else None,
+            "prefill_prompt_tokens": int(prefill_prompt_tokens) if prefill_prompt_tokens is not None else None,
+            "generated_tokens": int(generated_tokens) if generated_tokens is not None else None,
+            "decode_tps": float(decode_tps) if decode_tps is not None else None,
+            "decode_ms_per_token": float(decode_ms_per_token) if decode_ms_per_token is not None else None,
+            "checkpoint_index": int(checkpoint_index) if checkpoint_index is not None else None,
+            "checkpoint_total": int(checkpoint_total) if checkpoint_total is not None else None,
         }
 
         # Initialize state buffer/seq lazily
@@ -178,8 +218,17 @@ class ProcessManager:
         state = InstanceRuntimeState(
             instance_id=instance_id,
             busy=busy,
+            phase=phase,
             prefill_progress=pp if isinstance(pp, float) or pp is None else None,
             active_slots=active_slots,
+            slot_id=int(slot_id) if slot_id is not None else None,
+            task_id=int(task_id) if task_id is not None else None,
+            prefill_prompt_tokens=int(prefill_prompt_tokens) if prefill_prompt_tokens is not None else None,
+            generated_tokens=int(generated_tokens) if generated_tokens is not None else None,
+            decode_tps=float(decode_tps) if decode_tps is not None else None,
+            decode_ms_per_token=float(decode_ms_per_token) if decode_ms_per_token is not None else None,
+            checkpoint_index=int(checkpoint_index) if checkpoint_index is not None else None,
+            checkpoint_total=int(checkpoint_total) if checkpoint_total is not None else None,
             timestamp=now_ts,
         )
         event = InstanceStateEvent(
@@ -208,8 +257,33 @@ class ProcessManager:
             self._emit_state_if_changed(
                 instance_id,
                 busy=True,
+                phase=InstancePhase.PREFILL,
                 prefill_progress=self.last_runtime.get(instance_id, {}).get("prefill_progress"),
                 active_slots=len(slots),
+                slot_id=slot_id,
+                task_id=self.last_runtime.get(instance_id, {}).get("task_id"),
+            )
+            return
+
+        # new prompt → phase becomes prefill; capture task_id and prompt tokens
+        m = self._re_new_prompt.search(line)
+        if m:
+            try:
+                slot_id = int(m.group(1))
+                task_id = int(m.group(2))
+                prompt_tokens = int(m.group(3))
+            except Exception:
+                slot_id, task_id, prompt_tokens = -1, -1, None
+            slots.add(slot_id)
+            self._emit_state_if_changed(
+                instance_id,
+                busy=True,
+                phase=InstancePhase.PREFILL,
+                prefill_progress=0.0,
+                active_slots=len(slots),
+                slot_id=slot_id,
+                task_id=task_id,
+                prefill_prompt_tokens=prompt_tokens,
             )
             return
 
@@ -223,8 +297,11 @@ class ProcessManager:
             self._emit_state_if_changed(
                 instance_id,
                 busy=True if len(slots) > 0 else (self.last_runtime.get(instance_id, {}).get("busy") is True),
+                phase=InstancePhase.PREFILL,
                 prefill_progress=progress,
                 active_slots=len(slots),
+                slot_id=self.last_runtime.get(instance_id, {}).get("slot_id"),
+                task_id=self.last_runtime.get(instance_id, {}).get("task_id"),
             )
             return
 
@@ -233,8 +310,61 @@ class ProcessManager:
             self._emit_state_if_changed(
                 instance_id,
                 busy=True if len(slots) > 0 else (self.last_runtime.get(instance_id, {}).get("busy") is True),
+                phase=InstancePhase.GENERATING if len(slots) > 0 else InstancePhase.IDLE,
                 prefill_progress=1.0,
                 active_slots=len(slots),
+                slot_id=self.last_runtime.get(instance_id, {}).get("slot_id"),
+                task_id=self.last_runtime.get(instance_id, {}).get("task_id"),
+            )
+            return
+
+        # context checkpoint progress (still prefill phase)
+        m = self._re_checkpoint.search(line)
+        if m:
+            try:
+                idx = int(m.group(1))
+                total = int(m.group(2))
+            except Exception:
+                idx, total = None, None
+            self._emit_state_if_changed(
+                instance_id,
+                busy=True if len(slots) > 0 else (self.last_runtime.get(instance_id, {}).get("busy") is True),
+                phase=InstancePhase.PREFILL,
+                prefill_progress=self.last_runtime.get(instance_id, {}).get("prefill_progress"),
+                active_slots=len(slots),
+                slot_id=self.last_runtime.get(instance_id, {}).get("slot_id"),
+                task_id=self.last_runtime.get(instance_id, {}).get("task_id"),
+                checkpoint_index=idx,
+                checkpoint_total=total,
+            )
+            return
+
+        # decode timing metrics after generation finishes
+        if self._re_print_timing.search(line):
+            # Subsequent lines include timing metrics; rely on later matches
+            return
+
+        m = self._re_decode_eval_line.search(line)
+        if m:
+            try:
+                # decode line: total ms, tokens, ms/token, tokens per second
+                _ms_total = float(m.group(1))
+                gen_tokens = int(m.group(2))
+                ms_per_tok = float(m.group(3))
+                tps = float(m.group(4))
+            except Exception:
+                gen_tokens, ms_per_tok, tps = None, None, None
+            self._emit_state_if_changed(
+                instance_id,
+                busy=True if len(slots) > 0 else (self.last_runtime.get(instance_id, {}).get("busy") is True),
+                phase=self.last_runtime.get(instance_id, {}).get("phase", InstancePhase.GENERATING if len(slots) > 0 else InstancePhase.IDLE),
+                prefill_progress=self.last_runtime.get(instance_id, {}).get("prefill_progress"),
+                active_slots=len(slots),
+                slot_id=self.last_runtime.get(instance_id, {}).get("slot_id"),
+                task_id=self.last_runtime.get(instance_id, {}).get("task_id"),
+                generated_tokens=gen_tokens,
+                decode_tps=tps,
+                decode_ms_per_token=ms_per_tok,
             )
             return
 
@@ -251,15 +381,23 @@ class ProcessManager:
                 self._emit_state_if_changed(
                     instance_id,
                     busy=False,
+                    phase=InstancePhase.IDLE,
                     prefill_progress=None,
                     active_slots=0,
+                    slot_id=None,
+                    task_id=None,
+                    checkpoint_index=None,
+                    checkpoint_total=None,
                 )
             else:
                 self._emit_state_if_changed(
                     instance_id,
                     busy=True,
+                    phase=self.last_runtime.get(instance_id, {}).get("phase", InstancePhase.GENERATING),
                     prefill_progress=self.last_runtime.get(instance_id, {}).get("prefill_progress"),
                     active_slots=len(slots),
+                    slot_id=self.last_runtime.get(instance_id, {}).get("slot_id"),
+                    task_id=self.last_runtime.get(instance_id, {}).get("task_id"),
                 )
             return
 
@@ -270,8 +408,13 @@ class ProcessManager:
             self._emit_state_if_changed(
                 instance_id,
                 busy=False,
+                phase=InstancePhase.IDLE,
                 prefill_progress=None,
                 active_slots=0,
+                slot_id=None,
+                task_id=None,
+                checkpoint_index=None,
+                checkpoint_total=None,
             )
             return
     
@@ -337,6 +480,7 @@ class ProcessManager:
                 self.state_sequences[instance_id] = 0
                 self.last_runtime[instance_id] = {
                     "busy": False,
+                    "phase": InstancePhase.IDLE.value,
                     "prefill_progress": None,
                     "active_slots": 0,
                 }
