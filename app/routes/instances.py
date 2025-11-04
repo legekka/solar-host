@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException
-from typing import List
+from typing import List, Optional
 
 from app.models import (
     Instance, InstanceCreate, InstanceUpdate, 
-    InstanceResponse, InstanceStatus, InstanceRuntimeState
+    InstanceResponse, InstanceStatus, InstanceRuntimeState, GenerationMetrics
 )
 from app.config import config_manager
 from app.process_manager import process_manager
@@ -175,4 +175,50 @@ async def get_instance_state(instance_id: str):
         active_slots=getattr(instance, "active_slots", 0),
         timestamp=now_iso,
     )
+
+
+@router.get("/{instance_id}/last-generation", response_model=GenerationMetrics)
+async def get_last_generation(instance_id: str, after: Optional[str] = None, within_s: Optional[int] = None):
+    """Return most recent finished generation metrics for the instance.
+
+    Optional filters:
+    - after: ISO8601 timestamp; only return if finished_at >= after
+    - within_s: only return if finished within the last N seconds
+    """
+    # Validate instance
+    instance = config_manager.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    metrics = process_manager.get_last_generation(instance_id)
+    if not metrics:
+        raise HTTPException(status_code=404, detail="No generation metrics available")
+
+    # Apply filters
+    try:
+        from datetime import datetime, timezone
+        def parse_iso(ts: str | None):
+            if not ts:
+                return None
+            try:
+                return datetime.fromisoformat(ts.replace('Z', '+00:00')).astimezone(timezone.utc)
+            except Exception:
+                return None
+
+        finished_dt = parse_iso(metrics.finished_at)
+        if after:
+            after_dt = parse_iso(after)
+            if after_dt and finished_dt and finished_dt < after_dt:
+                raise HTTPException(status_code=404, detail="No generation metrics after the specified timestamp")
+        if within_s is not None and within_s >= 0:
+            now_dt = datetime.now(timezone.utc)
+            if finished_dt and (now_dt - finished_dt).total_seconds() > float(within_s):
+                raise HTTPException(status_code=404, detail="No recent generation metrics within the specified window")
+    except HTTPException:
+        raise
+    except Exception:
+        # On any parsing error, return the metrics without filtering
+        pass
+
+    return metrics
 

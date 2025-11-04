@@ -145,8 +145,20 @@ async def get_memory():
             status_code=503,
             detail="Memory information not available"
         )
+    # Coerce types explicitly to satisfy typing
+    try:
+        used_gb = float(memory_info.get("used_gb"))  # type: ignore[arg-type]
+        total_gb = float(memory_info.get("total_gb"))  # type: ignore[arg-type]
+        percent = float(memory_info.get("percent"))  # type: ignore[arg-type]
+        memory_type = str(memory_info.get("memory_type"))
+    except Exception:
+        # Fallback values if coercion fails
+        used_gb = 0.0
+        total_gb = 0.0
+        percent = 0.0
+        memory_type = "RAM"
     
-    return MemoryInfo(**memory_info)
+    return MemoryInfo(used_gb=used_gb, total_gb=total_gb, percent=percent, memory_type=memory_type)
 
 
 if __name__ == "__main__":

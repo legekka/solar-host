@@ -111,3 +111,22 @@ class MemoryInfo(BaseModel):
     percent: float = Field(..., description="Usage percentage")
     memory_type: str = Field(..., description="Type of memory (VRAM or RAM)")
 
+
+class GenerationMetrics(BaseModel):
+    """Per-generation token usage and timing metrics parsed from llama-server logs."""
+    instance_id: str
+    slot_id: Optional[int] = None
+    task_id: Optional[int] = None
+
+    # Token usage
+    prompt_tokens: Optional[int] = None
+    generated_tokens: Optional[int] = None
+
+    # Decode performance
+    decode_tps: Optional[float] = None
+    decode_ms_per_token: Optional[float] = None
+
+    # Timestamps
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+

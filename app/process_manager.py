@@ -4,7 +4,7 @@ import time
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional, Any
 from collections import deque
 import asyncio
 import threading
@@ -18,6 +18,7 @@ from app.models import (
     InstanceRuntimeState,
     InstanceStateEvent,
     InstancePhase,
+    GenerationMetrics,
 )
 from app.config import settings, config_manager
 
@@ -37,7 +38,11 @@ class ProcessManager:
         self.state_buffers: Dict[str, deque] = {}
         self.state_sequences: Dict[str, int] = {}
         self.active_slot_ids: Dict[str, set] = {}
-        self.last_runtime: Dict[str, Dict[str, object]] = {}
+        self.last_runtime: Dict[str, Dict[str, Any]] = {}
+
+        # Per-slot generation metrics tracking
+        self.pending_generations_by_slot: Dict[str, Dict[int, Dict[str, object]]] = {}
+        self.recent_generations: Dict[str, deque] = {}
 
         # Compile regex patterns for parsing llama-server logs
         self._re_launch = re.compile(r"slot\s+launch_slot_:\s+id\s+(\d+)\s*\|\s*task\s+(-?\d+)\s*\|\s*processing task")
@@ -139,28 +144,27 @@ class ProcessManager:
         *,
         busy: bool,
         phase: InstancePhase,
-        prefill_progress: object,
+        prefill_progress: Optional[float],
         active_slots: int,
-        slot_id: object = None,
-        task_id: object = None,
-        prefill_prompt_tokens: object = None,
-        generated_tokens: object = None,
-        decode_tps: object = None,
-        decode_ms_per_token: object = None,
-        checkpoint_index: object = None,
-        checkpoint_total: object = None,
+        slot_id: Optional[int] = None,
+        task_id: Optional[int] = None,
+        prefill_prompt_tokens: Optional[int] = None,
+        generated_tokens: Optional[int] = None,
+        decode_tps: Optional[float] = None,
+        decode_ms_per_token: Optional[float] = None,
+        checkpoint_index: Optional[int] = None,
+        checkpoint_total: Optional[int] = None,
     ):
         """Update in-memory runtime and enqueue a state event if any value changed."""
         # Normalize prefill_progress: ensure float or None
-        pp: object
+        pp: Optional[float]
         if prefill_progress is None:
             pp = None
         else:
             try:
-                f = float(prefill_progress)  # type: ignore[assignment]
+                pp = float(prefill_progress)
             except Exception:
-                f = None
-            pp = f
+                pp = None
 
         prev = self.last_runtime.get(instance_id)
         changed = (
@@ -169,14 +173,14 @@ class ProcessManager:
             prev.get("phase") != phase.value or
             prev.get("prefill_progress") != pp or
             prev.get("active_slots") != active_slots or
-            prev.get("slot_id") != (int(slot_id) if slot_id is not None else None) or
-            prev.get("task_id") != (int(task_id) if task_id is not None else None) or
-            prev.get("prefill_prompt_tokens") != (int(prefill_prompt_tokens) if prefill_prompt_tokens is not None else None) or
-            prev.get("generated_tokens") != (int(generated_tokens) if generated_tokens is not None else None) or
+            prev.get("slot_id") != (slot_id if slot_id is not None else None) or
+            prev.get("task_id") != (task_id if task_id is not None else None) or
+            prev.get("prefill_prompt_tokens") != (prefill_prompt_tokens if prefill_prompt_tokens is not None else None) or
+            prev.get("generated_tokens") != (generated_tokens if generated_tokens is not None else None) or
             prev.get("decode_tps") != (float(decode_tps) if decode_tps is not None else None) or
             prev.get("decode_ms_per_token") != (float(decode_ms_per_token) if decode_ms_per_token is not None else None) or
-            prev.get("checkpoint_index") != (int(checkpoint_index) if checkpoint_index is not None else None) or
-            prev.get("checkpoint_total") != (int(checkpoint_total) if checkpoint_total is not None else None)
+            prev.get("checkpoint_index") != (checkpoint_index if checkpoint_index is not None else None) or
+            prev.get("checkpoint_total") != (checkpoint_total if checkpoint_total is not None else None)
         )
 
         # Always update in-memory instance runtime fields
@@ -196,14 +200,14 @@ class ProcessManager:
             "phase": phase.value,
             "prefill_progress": pp,
             "active_slots": active_slots,
-            "slot_id": int(slot_id) if slot_id is not None else None,
-            "task_id": int(task_id) if task_id is not None else None,
-            "prefill_prompt_tokens": int(prefill_prompt_tokens) if prefill_prompt_tokens is not None else None,
-            "generated_tokens": int(generated_tokens) if generated_tokens is not None else None,
+            "slot_id": slot_id if slot_id is not None else None,
+            "task_id": task_id if task_id is not None else None,
+            "prefill_prompt_tokens": prefill_prompt_tokens if prefill_prompt_tokens is not None else None,
+            "generated_tokens": generated_tokens if generated_tokens is not None else None,
             "decode_tps": float(decode_tps) if decode_tps is not None else None,
             "decode_ms_per_token": float(decode_ms_per_token) if decode_ms_per_token is not None else None,
-            "checkpoint_index": int(checkpoint_index) if checkpoint_index is not None else None,
-            "checkpoint_total": int(checkpoint_total) if checkpoint_total is not None else None,
+            "checkpoint_index": checkpoint_index if checkpoint_index is not None else None,
+            "checkpoint_total": checkpoint_total if checkpoint_total is not None else None,
         }
 
         # Initialize state buffer/seq lazily
@@ -219,16 +223,16 @@ class ProcessManager:
             instance_id=instance_id,
             busy=busy,
             phase=phase,
-            prefill_progress=pp if isinstance(pp, float) or pp is None else None,
+            prefill_progress=pp if (isinstance(pp, float) or pp is None) else None,
             active_slots=active_slots,
-            slot_id=int(slot_id) if slot_id is not None else None,
-            task_id=int(task_id) if task_id is not None else None,
-            prefill_prompt_tokens=int(prefill_prompt_tokens) if prefill_prompt_tokens is not None else None,
-            generated_tokens=int(generated_tokens) if generated_tokens is not None else None,
+            slot_id=slot_id if slot_id is not None else None,
+            task_id=task_id if task_id is not None else None,
+            prefill_prompt_tokens=prefill_prompt_tokens if prefill_prompt_tokens is not None else None,
+            generated_tokens=generated_tokens if generated_tokens is not None else None,
             decode_tps=float(decode_tps) if decode_tps is not None else None,
             decode_ms_per_token=float(decode_ms_per_token) if decode_ms_per_token is not None else None,
-            checkpoint_index=int(checkpoint_index) if checkpoint_index is not None else None,
-            checkpoint_total=int(checkpoint_total) if checkpoint_total is not None else None,
+            checkpoint_index=checkpoint_index if checkpoint_index is not None else None,
+            checkpoint_total=checkpoint_total if checkpoint_total is not None else None,
             timestamp=now_ts,
         )
         event = InstanceStateEvent(
@@ -237,6 +241,16 @@ class ProcessManager:
             data=state,
         )
         self.state_buffers[instance_id].append(event)
+
+    def _coerce_phase(self, value: object, default: InstancePhase) -> InstancePhase:
+        if isinstance(value, InstancePhase):
+            return value
+        if isinstance(value, str):
+            try:
+                return InstancePhase(value)
+            except Exception:
+                return default
+        return default
 
     def _parse_and_update_runtime(self, instance_id: str, line: str):
         """Parse a single log line and update runtime state accordingly."""
@@ -275,6 +289,19 @@ class ProcessManager:
             except Exception:
                 slot_id, task_id, prompt_tokens = -1, -1, None
             slots.add(slot_id)
+            # Initialize pending generation metrics for this slot
+            try:
+                pending_by_slot = self.pending_generations_by_slot.setdefault(instance_id, {})
+                pending = pending_by_slot.get(slot_id) or {}
+                pending.update({
+                    "slot_id": slot_id,
+                    "task_id": task_id,
+                    "prompt_tokens": int(prompt_tokens) if prompt_tokens is not None else None,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                })
+                pending_by_slot[slot_id] = pending
+            except Exception:
+                pass
             self._emit_state_if_changed(
                 instance_id,
                 busy=True,
@@ -354,10 +381,28 @@ class ProcessManager:
                 tps = float(m.group(4))
             except Exception:
                 gen_tokens, ms_per_tok, tps = None, None, None
+            # Update pending metrics for last active slot
+            try:
+                last_slot_id = self.last_runtime.get(instance_id, {}).get("slot_id")
+                if isinstance(last_slot_id, int):
+                    pending_by_slot = self.pending_generations_by_slot.setdefault(instance_id, {})
+                    pending = pending_by_slot.get(last_slot_id) or {"slot_id": last_slot_id}
+                    if gen_tokens is not None:
+                        pending["generated_tokens"] = int(gen_tokens)
+                    if tps is not None:
+                        pending["decode_tps"] = float(tps)
+                    if ms_per_tok is not None:
+                        pending["decode_ms_per_token"] = float(ms_per_tok)
+                    pending_by_slot[last_slot_id] = pending
+            except Exception:
+                pass
             self._emit_state_if_changed(
                 instance_id,
                 busy=True if len(slots) > 0 else (self.last_runtime.get(instance_id, {}).get("busy") is True),
-                phase=self.last_runtime.get(instance_id, {}).get("phase", InstancePhase.GENERATING if len(slots) > 0 else InstancePhase.IDLE),
+                phase=self._coerce_phase(
+                    self.last_runtime.get(instance_id, {}).get("phase"),
+                    InstancePhase.GENERATING if len(slots) > 0 else InstancePhase.IDLE,
+                ),
                 prefill_progress=self.last_runtime.get(instance_id, {}).get("prefill_progress"),
                 active_slots=len(slots),
                 slot_id=self.last_runtime.get(instance_id, {}).get("slot_id"),
@@ -377,6 +422,42 @@ class ProcessManager:
                 slot_id = -1
             if slot_id in slots:
                 slots.discard(slot_id)
+            # Finalize any pending generation for this slot
+            try:
+                pending_by_slot = self.pending_generations_by_slot.get(instance_id, {})
+                pending = pending_by_slot.pop(slot_id, None)
+                if pending is not None:
+                    sid_val = pending.get("slot_id")
+                    tid_val = pending.get("task_id")
+                    ptok_val = pending.get("prompt_tokens")
+                    gtok_val = pending.get("generated_tokens")
+                    tps_val = pending.get("decode_tps")
+                    mspt_val = pending.get("decode_ms_per_token")
+                    started_val = pending.get("started_at")
+
+                    slot_id_out: Optional[int] = sid_val if isinstance(sid_val, int) else None
+                    task_id_out: Optional[int] = tid_val if isinstance(tid_val, int) else None
+                    prompt_tokens_out: Optional[int] = ptok_val if isinstance(ptok_val, int) else None
+                    gen_tokens_out: Optional[int] = gtok_val if isinstance(gtok_val, int) else None
+                    decode_tps_out: Optional[float] = float(tps_val) if isinstance(tps_val, (int, float)) else None
+                    decode_mspt_out: Optional[float] = float(mspt_val) if isinstance(mspt_val, (int, float)) else None
+                    started_out: Optional[str] = started_val if isinstance(started_val, str) else None
+
+                    metrics = GenerationMetrics(
+                        instance_id=instance_id,
+                        slot_id=slot_id_out,
+                        task_id=task_id_out,
+                        prompt_tokens=prompt_tokens_out,
+                        generated_tokens=gen_tokens_out,
+                        decode_tps=decode_tps_out,
+                        decode_ms_per_token=decode_mspt_out,
+                        started_at=started_out,
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    dq = self.recent_generations.setdefault(instance_id, deque(maxlen=settings.log_buffer_size))
+                    dq.append(metrics)
+            except Exception:
+                pass
             if len(slots) == 0:
                 self._emit_state_if_changed(
                     instance_id,
@@ -393,7 +474,10 @@ class ProcessManager:
                 self._emit_state_if_changed(
                     instance_id,
                     busy=True,
-                    phase=self.last_runtime.get(instance_id, {}).get("phase", InstancePhase.GENERATING),
+                    phase=self._coerce_phase(
+                        self.last_runtime.get(instance_id, {}).get("phase"),
+                        InstancePhase.GENERATING,
+                    ),
                     prefill_progress=self.last_runtime.get(instance_id, {}).get("prefill_progress"),
                     active_slots=len(slots),
                     slot_id=self.last_runtime.get(instance_id, {}).get("slot_id"),
@@ -417,6 +501,16 @@ class ProcessManager:
                 checkpoint_total=None,
             )
             return
+
+    # ------- Generation metrics accessors -------
+    def get_last_generation(self, instance_id: str) -> Optional[GenerationMetrics]:
+        dq = self.recent_generations.get(instance_id)
+        if not dq:
+            return None
+        try:
+            return dq[-1]
+        except Exception:
+            return None
     
     async def start_instance(self, instance_id: str) -> bool:
         """Start a llama-server instance"""
