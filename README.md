@@ -269,6 +269,7 @@ When creating an instance, you can configure these parameters:
 | `min_p` | No | 0.0 | Min-p sampling (0.0-1.0) |
 | `ctx_size` | No | 131072 | Context window size |
 | `chat_template_file` | No | - | Path to Jinja chat template file |
+| `special` | No | false | When true, starts llama-server with the `--special` flag |
 | `host` | No | "0.0.0.0" | Host to bind llama-server to |
 | `port` | No | auto | Port (auto-assigned if not specified) |
 | `api_key` | ✅ Yes | - | API key for this specific llama-server instance |
@@ -305,6 +306,7 @@ When creating an instance, you can configure these parameters:
   "min_p": 0.0,
   "ctx_size": 131072,
   "chat_template_file": "/Users/admin/models/templates/harmony.jinja",
+  "special": false,
   "host": "0.0.0.0",
   "api_key": "gpt-oss-120b-key"
 }

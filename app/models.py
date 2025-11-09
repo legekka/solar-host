@@ -34,6 +34,7 @@ class InstanceConfig(BaseModel):
     host: str = Field(default="0.0.0.0", description="Host to bind to")
     port: Optional[int] = Field(default=None, description="Port (auto-assigned if not specified)")
     api_key: str = Field(..., description="API key for this llama-server instance")
+    special: bool = Field(default=False, description="Enable llama-server --special flag")
 
 
 class Instance(BaseModel):

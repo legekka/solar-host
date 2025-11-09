@@ -97,6 +97,9 @@ class ProcessManager:
         else:
             cmd.extend(["--jinja"])
         
+        if getattr(config, "special", False):
+            cmd.append("--special")
+
         return cmd
     
     def _read_logs(self, instance_id: str, process: subprocess.Popen, log_file: Path):
