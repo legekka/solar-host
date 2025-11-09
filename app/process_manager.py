@@ -94,6 +94,8 @@ class ProcessManager:
         
         if config.chat_template_file:
             cmd.extend(["--jinja", "--chat-template-file", config.chat_template_file])
+        else:
+            cmd.extend(["--jinja"])
         
         return cmd
     
