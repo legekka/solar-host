@@ -207,12 +207,12 @@ class ServerState:
         self.max_length = max_length
         self.labels = labels
 
-        torch_dtype = self.get_dtype(dtype)
+        model_dtype = self.get_dtype(dtype)
 
         logger.info(f"Loading model: {model_id}")
         logger.info(f"Model type: {model_type}")
         logger.info(f"Device: {self.device}")
-        logger.info(f"Dtype: {torch_dtype}")
+        logger.info(f"Dtype: {model_dtype}")
 
         # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
@@ -231,7 +231,7 @@ class ServerState:
             from transformers import AutoModelForCausalLM
 
             model_kwargs: Dict[str, object] = {
-                "torch_dtype": torch_dtype,
+                "dtype": model_dtype,
                 "trust_remote_code": trust_remote_code,
                 "device_map": self.device if self.device != "mps" else None,
             }
@@ -254,7 +254,7 @@ class ServerState:
 
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_id,
-                torch_dtype=torch_dtype,
+                dtype=model_dtype,
                 trust_remote_code=trust_remote_code,
             )
             target_device = torch.device(self.device)

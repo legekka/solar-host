@@ -57,7 +57,12 @@ async def update_instance(instance_id: str, data: InstanceUpdate):
         )
 
     try:
-        instance.config = data.config
+        # Parse config if it's a dict (from FastAPI request body)
+        config = data.config
+        if isinstance(config, dict):
+            config = parse_instance_config(config)
+        
+        instance.config = config
         config_manager.update_instance(instance_id, instance)
         return InstanceResponse(
             instance=instance, message=f"Instance {instance_id} updated successfully"

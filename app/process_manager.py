@@ -26,7 +26,7 @@ from app.backends.llamacpp import LlamaCppRunner
 from app.backends.huggingface import HuggingFaceRunner
 
 
-def get_runner_for_config(config: InstanceConfig) -> BackendRunner:
+def get_runner_for_config(config) -> BackendRunner:
     """Get the appropriate backend runner for a config type."""
     backend_type = getattr(config, "backend_type", "llamacpp")
 
