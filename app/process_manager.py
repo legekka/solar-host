@@ -210,9 +210,9 @@ class ProcessManager:
         if instance.status == InstanceStatus.RUNNING:
             return True
 
-        # Assign port if not set
-        if not instance.port:
-            instance.port = self._get_available_port()
+        # Always find an available port on start
+        # (previous port may now be in use by another process)
+        instance.port = self._get_available_port()
 
         # Get the appropriate runner for this backend type
         runner = get_runner_for_config(instance.config)
