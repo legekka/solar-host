@@ -69,7 +69,8 @@ class ProcessManager:
         """Check if a port is available (not bound by any process)."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
-                s.bind(("", port))
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("0.0.0.0", port))
                 return True
             except OSError:
                 return False
