@@ -1,10 +1,13 @@
 # Solar Host
 
-A process manager for llama-server instances with REST API and WebSocket log streaming.
+A multi-backend process manager for model inference servers with REST API and WebSocket log streaming.
 
 ## Features
 
-- Launch and manage llama-server child processes
+- **Multi-Backend Support:**
+  - llama.cpp (llama-server) for GGUF models
+  - HuggingFace AutoModelForCausalLM for text generation
+  - HuggingFace AutoModelForSequenceClassification for classification
 - Auto-assign ports starting from 3500
 - Persistent configuration with auto-restart on boot
 - Real-time log streaming via WebSocket
@@ -14,8 +17,18 @@ A process manager for llama-server instances with REST API and WebSocket log str
 ## Installation
 
 ```bash
-# Install dependencies
+# Install core dependencies
 pip install -r requirements.txt
+```
+
+### Backend-Specific Requirements
+
+**For llama.cpp backend:**
+- Install `llama-server` and ensure it's in your PATH
+
+**For HuggingFace backends:**
+```bash
+pip install torch transformers accelerate
 ```
 
 ## Setup
@@ -28,12 +41,6 @@ Create a `.env` file in the `solar-host/` directory:
 API_KEY=your-secret-key-here
 HOST=0.0.0.0
 PORT=8001
-```
-
-**Note:** You can also copy from the example:
-```bash
-cp .env.example .env
-# Then edit .env with your values
 ```
 
 ### 2. Start the server
@@ -55,34 +62,31 @@ The server will:
 
 ```bash
 curl http://localhost:8001/health
-# Should return: {"status":"healthy","service":"solar-host","version":"1.0.0"}
+# Should return: {"status":"healthy","service":"solar-host","version":"2.0.0"}
 ```
 
-### 4. Access Swagger UI (Optional)
+### 4. Access Swagger UI
 
 Open your browser to: **http://localhost:8001/docs**
 
-1. Click the **"Authorize"** button (green lock icon at the top right)
+1. Click the **"Authorize"** button
 2. Enter your API key from `.env` file
 3. Click **"Authorize"** and then **"Close"**
-4. Now you can use the interactive API documentation to create and manage instances!
+4. Now you can use the interactive API documentation!
 
-This is much easier than using `curl` commands! ✨
+## Backend Types
+
+Solar Host supports three backend types:
+
+| Backend Type | Model Type | Endpoints Supported |
+|--------------|------------|---------------------|
+| `llamacpp` | GGUF models via llama-server | `/v1/chat/completions`, `/v1/completions` |
+| `huggingface_causal` | HuggingFace AutoModelForCausalLM | `/v1/chat/completions`, `/v1/completions` |
+| `huggingface_classification` | HuggingFace AutoModelForSequenceClassification | `/v1/classify` |
 
 ## Managing Instances
 
-### Important: config.json is AUTO-GENERATED
-
-**You do NOT need to manually create `config.json`!**
-
-- The file is automatically created in the `solar-host/` directory
-- All instances are stored in this single file
-- The file persists instance configurations and their running state
-- It's managed entirely through the REST API
-
-### Creating Your First Instance
-
-Use the REST API to create instances. Here's a complete example:
+### Creating a llama.cpp Instance
 
 ```bash
 curl -X POST http://localhost:8001/instances \
@@ -90,114 +94,9 @@ curl -X POST http://localhost:8001/instances \
   -H "Content-Type: application/json" \
   -d '{
     "config": {
-      "model": "/Users/administrator/models/llama-3-8b.gguf",
-      "alias": "llama-3:8b",
-      "threads": 4,
-      "n_gpu_layers": 999,
-      "temp": 0.7,
-      "top_p": 0.9,
-      "top_k": 40,
-      "min_p": 0.05,
-      "ctx_size": 8192,
-      "chat_template_file": "/Users/administrator/models/templates/llama3.jinja",
-      "host": "0.0.0.0",
-      "api_key": "llama3-instance-key"
-    }
-  }'
-```
-
-**Response will include the instance ID:**
-```json
-{
-  "instance": {
-    "id": "abc123...",
-    "config": { ... },
-    "status": "stopped",
-    ...
-  },
-  "message": "Instance abc123... created successfully"
-}
-```
-
-### Adding Multiple Instances
-
-Simply call the create endpoint multiple times with different configurations:
-
-```bash
-# Instance 1: Small model
-curl -X POST http://localhost:8001/instances \
-  -H "X-API-Key: your-secret-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "config": {
-      "model": "/path/to/small-model.gguf",
-      "alias": "small-model:7b",
-      "threads": 2,
-      "n_gpu_layers": 999,
-      "temp": 0.7,
-      "top_p": 0.9,
-      "top_k": 40,
-      "min_p": 0.05,
-      "ctx_size": 4096,
-      "host": "0.0.0.0",
-      "api_key": "instance1-key"
-    }
-  }'
-
-# Instance 2: Large model
-curl -X POST http://localhost:8001/instances \
-  -H "X-API-Key: your-secret-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "config": {
-      "model": "/path/to/large-model.gguf",
-      "alias": "large-model:70b",
-      "threads": 8,
-      "n_gpu_layers": 999,
-      "temp": 0.8,
-      "top_p": 0.95,
-      "top_k": 40,
-      "min_p": 0.05,
-      "ctx_size": 32768,
-      "host": "0.0.0.0",
-      "api_key": "instance2-key"
-    }
-  }'
-```
-
-All instances are stored in the same `config.json` file.
-
-### Starting an Instance
-
-```bash
-# Get the instance ID from the create response or list endpoint
-curl -X POST http://localhost:8001/instances/{instance-id}/start \
-  -H "X-API-Key: your-secret-key-here"
-```
-
-The instance will:
-- Get assigned an available port (starting from 3500)
-- Start the llama-server process
-- Begin logging to `logs/{alias}_{timestamp}.log`
-
-### Viewing All Instances
-
-```bash
-curl http://localhost:8001/instances \
-  -H "X-API-Key: your-secret-key-here"
-```
-
-### Complete Workflow Example
-
-```bash
-# 1. Create instance
-RESPONSE=$(curl -s -X POST http://localhost:8001/instances \
-  -H "X-API-Key: your-secret-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "config": {
+      "backend_type": "llamacpp",
       "model": "/path/to/model.gguf",
-      "alias": "my-model:8b",
+      "alias": "llama-3:8b",
       "threads": 4,
       "n_gpu_layers": 999,
       "temp": 0.7,
@@ -208,25 +107,70 @@ RESPONSE=$(curl -s -X POST http://localhost:8001/instances \
       "host": "0.0.0.0",
       "api_key": "instance-key"
     }
-  }')
+  }'
+```
 
-# 2. Extract instance ID
-INSTANCE_ID=$(echo $RESPONSE | jq -r '.instance.id')
-echo "Created instance: $INSTANCE_ID"
+### Creating a HuggingFace Causal LM Instance
 
-# 3. Start the instance
-curl -X POST http://localhost:8001/instances/$INSTANCE_ID/start \
+```bash
+curl -X POST http://localhost:8001/instances \
+  -H "X-API-Key: your-secret-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config": {
+      "backend_type": "huggingface_causal",
+      "model_id": "meta-llama/Llama-2-7b-chat-hf",
+      "alias": "llama2-hf:7b",
+      "device": "auto",
+      "dtype": "auto",
+      "max_length": 4096,
+      "trust_remote_code": false,
+      "use_flash_attention": true,
+      "host": "0.0.0.0",
+      "api_key": "instance-key"
+    }
+  }'
+```
+
+### Creating a HuggingFace Classification Instance
+
+```bash
+curl -X POST http://localhost:8001/instances \
+  -H "X-API-Key: your-secret-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config": {
+      "backend_type": "huggingface_classification",
+      "model_id": "distilbert-base-uncased-finetuned-sst-2-english",
+      "alias": "sentiment:distilbert",
+      "device": "auto",
+      "dtype": "auto",
+      "max_length": 512,
+      "labels": ["negative", "positive"],
+      "host": "0.0.0.0",
+      "api_key": "instance-key"
+    }
+  }'
+```
+
+### Starting an Instance
+
+```bash
+curl -X POST http://localhost:8001/instances/{instance-id}/start \
   -H "X-API-Key: your-secret-key-here"
+```
 
-# 4. Check status
-curl http://localhost:8001/instances/$INSTANCE_ID \
+### Viewing All Instances
+
+```bash
+curl http://localhost:8001/instances \
   -H "X-API-Key: your-secret-key-here"
+```
 
-# 5. View logs (WebSocket - use a WebSocket client)
-# ws://localhost:8001/instances/$INSTANCE_ID/logs
+### Stopping an Instance
 
-# 6. Stop when done
-curl -X POST http://localhost:8001/instances/$INSTANCE_ID/stop \
+```bash
+curl -X POST http://localhost:8001/instances/{instance-id}/stop \
   -H "X-API-Key: your-secret-key-here"
 ```
 
@@ -242,10 +186,18 @@ curl -X POST http://localhost:8001/instances/$INSTANCE_ID/stop \
 - `POST /instances/{id}/start` - Start instance
 - `POST /instances/{id}/stop` - Stop instance
 - `POST /instances/{id}/restart` - Restart instance
+- `GET /instances/{id}/state` - Get runtime state
+- `GET /instances/{id}/last-generation` - Get last generation metrics
 
 ### WebSocket
 
 - `WS /instances/{id}/logs` - Stream logs with sequence numbers
+- `WS /instances/{id}/state` - Stream runtime state updates
+
+### System
+
+- `GET /health` - Health check
+- `GET /memory` - GPU/RAM memory usage
 
 ## Authentication
 
@@ -253,14 +205,13 @@ All requests require an `X-API-Key` header with your configured API key from the
 
 ## Configuration Reference
 
-### Instance Config Parameters
-
-When creating an instance, you can configure these parameters:
+### llama.cpp Config Parameters
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `model` | ✅ Yes | - | Full path to the GGUF model file |
-| `alias` | ✅ Yes | - | Model alias (e.g., "llama-3:8b") used for routing |
+| `backend_type` | No | `"llamacpp"` | Backend type identifier |
+| `model` | Yes | - | Full path to the GGUF model file |
+| `alias` | Yes | - | Model alias (e.g., "llama-3:8b") used for routing |
 | `threads` | No | 1 | Number of CPU threads to use |
 | `n_gpu_layers` | No | 999 | Number of layers to offload to GPU (999 = all) |
 | `temp` | No | 1.0 | Sampling temperature (0.0-2.0) |
@@ -269,61 +220,135 @@ When creating an instance, you can configure these parameters:
 | `min_p` | No | 0.0 | Min-p sampling (0.0-1.0) |
 | `ctx_size` | No | 131072 | Context window size |
 | `chat_template_file` | No | - | Path to Jinja chat template file |
-| `special` | No | false | When true, starts llama-server with the `--special` flag |
-| `host` | No | "0.0.0.0" | Host to bind llama-server to |
+| `special` | No | false | Enable llama-server `--special` flag |
+| `host` | No | "0.0.0.0" | Host to bind to |
 | `port` | No | auto | Port (auto-assigned if not specified) |
-| `api_key` | ✅ Yes | - | API key for this specific llama-server instance |
+| `api_key` | Yes | - | API key for this instance |
 
-### Example Configurations
+### HuggingFace Causal LM Config Parameters
 
-**Small 7B model:**
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `backend_type` | Yes | - | Must be `"huggingface_causal"` |
+| `model_id` | Yes | - | HuggingFace model ID or local path |
+| `alias` | Yes | - | Model alias for routing |
+| `device` | No | `"auto"` | Device: `auto`, `cuda`, `mps`, `cpu` |
+| `dtype` | No | `"auto"` | Data type: `auto`, `float16`, `bfloat16`, `float32` |
+| `max_length` | No | 4096 | Maximum sequence length |
+| `trust_remote_code` | No | false | Trust remote code from HuggingFace |
+| `use_flash_attention` | No | true | Use Flash Attention 2 if available |
+| `host` | No | "0.0.0.0" | Host to bind to |
+| `port` | No | auto | Port (auto-assigned if not specified) |
+| `api_key` | Yes | - | API key for this instance |
+
+### HuggingFace Classification Config Parameters
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `backend_type` | Yes | - | Must be `"huggingface_classification"` |
+| `model_id` | Yes | - | HuggingFace model ID or local path |
+| `alias` | Yes | - | Model alias for routing |
+| `device` | No | `"auto"` | Device: `auto`, `cuda`, `mps`, `cpu` |
+| `dtype` | No | `"auto"` | Data type: `auto`, `float16`, `bfloat16`, `float32` |
+| `max_length` | No | 512 | Maximum sequence length |
+| `labels` | No | auto | Label names (auto-detected from model if not provided) |
+| `trust_remote_code` | No | false | Trust remote code from HuggingFace |
+| `host` | No | "0.0.0.0" | Host to bind to |
+| `port` | No | auto | Port (auto-assigned if not specified) |
+| `api_key` | Yes | - | API key for this instance |
+
+### Device Options
+
+| Device | Description |
+|--------|-------------|
+| `auto` | Automatically select best available (CUDA > MPS > CPU) |
+| `cuda` | NVIDIA GPU (requires CUDA) |
+| `mps` | Apple Silicon GPU (macOS) |
+| `cpu` | CPU only |
+
+## Example Configurations
+
+### llama.cpp - Small Model
+
 ```json
 {
-  "model": "/Users/admin/models/llama-3-7b.gguf",
+  "backend_type": "llamacpp",
+  "model": "/models/llama-3-7b.gguf",
   "alias": "llama-3:7b",
   "threads": 4,
   "n_gpu_layers": 999,
   "temp": 0.7,
   "top_p": 0.9,
-  "top_k": 40,
-  "min_p": 0.05,
   "ctx_size": 8192,
-  "host": "0.0.0.0",
   "api_key": "llama3-7b-key"
 }
 ```
 
-**Large 120B model with custom template:**
+### llama.cpp - Large Model with Custom Template
+
 ```json
 {
-  "model": "/Users/admin/models/gpt-oss-120b-F16.gguf",
+  "backend_type": "llamacpp",
+  "model": "/models/gpt-oss-120b-F16.gguf",
   "alias": "gpt-oss:120b",
   "threads": 1,
   "n_gpu_layers": 999,
-  "temp": 1.0,
-  "top_p": 1.0,
-  "top_k": 0,
-  "min_p": 0.0,
   "ctx_size": 131072,
-  "chat_template_file": "/Users/admin/models/templates/harmony.jinja",
-  "special": false,
-  "host": "0.0.0.0",
-  "api_key": "gpt-oss-120b-key"
+  "chat_template_file": "/models/templates/harmony.jinja",
+  "api_key": "gpt-oss-key"
+}
+```
+
+### HuggingFace - Text Generation
+
+```json
+{
+  "backend_type": "huggingface_causal",
+  "model_id": "microsoft/phi-2",
+  "alias": "phi-2:2.7b",
+  "device": "cuda",
+  "dtype": "float16",
+  "max_length": 2048,
+  "api_key": "phi2-key"
+}
+```
+
+### HuggingFace - Sentiment Classification
+
+```json
+{
+  "backend_type": "huggingface_classification",
+  "model_id": "cardiffnlp/twitter-roberta-base-sentiment-latest",
+  "alias": "sentiment:roberta",
+  "device": "cuda",
+  "max_length": 512,
+  "labels": ["negative", "neutral", "positive"],
+  "api_key": "sentiment-key"
 }
 ```
 
 ## File Structure
 
-After running solar-host, your directory will look like:
-
 ```
 solar-host/
-├── .env                    # Your configuration (not in git)
+├── .env                    # Configuration (not in git)
 ├── config.json             # Auto-generated instance storage (not in git)
 ├── logs/                   # Auto-generated log directory (not in git)
-│   ├── llama-3-7b_1234567890.log
-│   └── gpt-oss-120b_1234567891.log
-├── app/                    # Application code
+├── app/
+│   ├── backends/           # Backend runners
+│   │   ├── base.py         # Abstract BackendRunner
+│   │   ├── llamacpp.py     # llama.cpp runner
+│   │   └── huggingface.py  # HuggingFace runner
+│   ├── models/             # Pydantic models
+│   │   ├── base.py         # Base models
+│   │   ├── llamacpp.py     # llama.cpp config
+│   │   └── huggingface.py  # HuggingFace configs
+│   ├── servers/            # Standalone server processes
+│   │   └── hf_server.py    # HuggingFace model server
+│   ├── routes/             # API routes
+│   ├── config.py           # Configuration management
+│   ├── main.py             # FastAPI application
+│   └── process_manager.py  # Process lifecycle management
 ├── requirements.txt
 └── README.md
 ```
@@ -340,78 +365,77 @@ solar-host/
 - You're not in the correct directory
 - Solution: `cd solar-host` and run from there
 
-### Instance fails to start
+### llama.cpp Instance fails to start
 
-**Check the following:**
+1. **Verify llama-server is installed:**
+   ```bash
+   which llama-server
+   ```
 
-1. **Model path is correct:**
+2. **Check model path:**
    ```bash
    ls -lh /path/to/your/model.gguf
    ```
 
-2. **llama-server is in PATH:**
+3. **Check instance logs in `logs/` directory**
+
+### HuggingFace Instance fails to start
+
+1. **Verify dependencies:**
    ```bash
-   which llama-server
-   # Should return the path to llama-server
+   python -c "import torch; import transformers; print('OK')"
    ```
 
-3. **Check instance logs:**
-   - Look in `logs/` directory for the instance log file
-   - File name includes the model alias and timestamp
+2. **Check CUDA availability (if using GPU):**
+   ```bash
+   python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
+   ```
 
-4. **Port already in use:**
-   - Solar-host will auto-assign the next available port
-   - Check with: `lsof -i :3500` (replace with your port)
+3. **Check MPS availability (macOS):**
+   ```bash
+   python -c "import torch; print(f'MPS: {torch.backends.mps.is_available()}')"
+   ```
 
-5. **Model format issues:**
-   - Ensure the model is a valid GGUF file
-   - Try running llama-server manually first
+4. **Check instance logs in `logs/` directory**
 
 ### Instance keeps retrying and failing
 
 - Solar-host will retry starting an instance up to 2 times
-- After 2 failures, it gives up and marks the instance as "failed"
-- Check the `error_message` field in the instance details:
+- Check the `error_message` field:
   ```bash
   curl http://localhost:8001/instances/{instance-id} \
     -H "X-API-Key: your-key" | jq '.error_message'
   ```
 
-### Logs not showing up
+### Conda Environment
 
-- Logs are stored in `logs/` directory
-- File name format: `{alias-with-dashes}_{timestamp}.log`
-- For real-time logs, use the WebSocket endpoint
+When running solar-host from a conda environment, HuggingFace server subprocesses automatically inherit the same environment. Just ensure all dependencies are installed in your conda environment:
 
-### Auto-restart not working
-
-- Make sure instances were in "running" state before shutdown
-- Check `config.json` - running instances have their status saved
-- The status is restored on solar-host startup
+```bash
+conda activate your-env
+pip install torch transformers accelerate
+```
 
 ## Integration with Solar Control
 
-Once you have solar-host running with instances:
+Register this host with solar-control to enable unified routing:
 
-1. Register this host with solar-control:
-   ```bash
-   curl -X POST http://your-control-server:8000/hosts \
-     -H "X-API-Key: gateway-key" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "Mac Studio 1",
-       "url": "http://192.168.1.100:8001",
-       "api_key": "your-solar-host-api-key"
-     }'
-   ```
+```bash
+curl -X POST http://your-control-server:8000/hosts \
+  -H "X-API-Key: gateway-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "GPU Server 1",
+    "url": "http://192.168.1.100:8001",
+    "api_key": "your-solar-host-api-key"
+  }'
+```
 
-2. Your instances will be accessible through the unified OpenAI gateway!
+Your instances will be accessible through the unified OpenAI-compatible gateway:
+- `/v1/chat/completions` - Chat completion (llamacpp, huggingface_causal)
+- `/v1/completions` - Text completion (llamacpp, huggingface_causal)
+- `/v1/classify` - Classification (huggingface_classification)
 
-## Support
+## Backward Compatibility
 
-For issues and questions:
-- Check logs in `logs/` directory
-- View instance status via API
-- Check llama-server is installed and accessible
-- Verify model paths are correct
-
+Existing configurations without `backend_type` are automatically treated as `llamacpp` instances. No migration required.

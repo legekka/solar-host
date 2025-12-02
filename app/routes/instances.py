@@ -2,10 +2,15 @@ from fastapi import APIRouter, HTTPException
 from typing import List, Optional
 
 from app.models import (
-    Instance, InstanceCreate, InstanceUpdate, 
-    InstanceResponse, InstanceStatus, InstanceRuntimeState, GenerationMetrics
+    Instance,
+    InstanceCreate,
+    InstanceUpdate,
+    InstanceResponse,
+    InstanceStatus,
+    InstanceRuntimeState,
+    GenerationMetrics,
 )
-from app.config import config_manager
+from app.config import config_manager, parse_instance_config
 from app.process_manager import process_manager
 
 
@@ -14,12 +19,11 @@ router = APIRouter(prefix="/instances", tags=["instances"])
 
 @router.post("", response_model=InstanceResponse)
 async def create_instance(data: InstanceCreate):
-    """Create a new llama-server instance"""
+    """Create a new model instance (llama.cpp or HuggingFace)"""
     try:
         instance = process_manager.create_instance(data.config)
         return InstanceResponse(
-            instance=instance,
-            message=f"Instance {instance.id} created successfully"
+            instance=instance, message=f"Instance {instance.id} created successfully"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -46,19 +50,17 @@ async def update_instance(instance_id: str, data: InstanceUpdate):
     instance = config_manager.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    
+
     if instance.status != InstanceStatus.STOPPED:
         raise HTTPException(
-            status_code=400, 
-            detail="Cannot update running instance. Stop it first."
+            status_code=400, detail="Cannot update running instance. Stop it first."
         )
-    
+
     try:
         instance.config = data.config
         config_manager.update_instance(instance_id, instance)
         return InstanceResponse(
-            instance=instance,
-            message=f"Instance {instance_id} updated successfully"
+            instance=instance, message=f"Instance {instance_id} updated successfully"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -70,18 +72,16 @@ async def delete_instance(instance_id: str):
     instance = config_manager.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    
+
     if instance.status != InstanceStatus.STOPPED:
         raise HTTPException(
-            status_code=400,
-            detail="Cannot delete running instance. Stop it first."
+            status_code=400, detail="Cannot delete running instance. Stop it first."
         )
-    
+
     try:
         config_manager.remove_instance(instance_id)
         return InstanceResponse(
-            instance=instance,
-            message=f"Instance {instance_id} deleted successfully"
+            instance=instance, message=f"Instance {instance_id} deleted successfully"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -93,21 +93,20 @@ async def start_instance(instance_id: str):
     instance = config_manager.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    
+
     success = await process_manager.start_instance(instance_id)
     instance = config_manager.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found after start")
-    
+
     if success:
         return InstanceResponse(
-            instance=instance,
-            message=f"Instance {instance_id} started successfully"
+            instance=instance, message=f"Instance {instance_id} started successfully"
         )
     else:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to start instance: {instance.error_message}"
+            detail=f"Failed to start instance: {instance.error_message}",
         )
 
 
@@ -117,21 +116,19 @@ async def stop_instance(instance_id: str):
     instance = config_manager.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    
+
     success = await process_manager.stop_instance(instance_id)
     instance = config_manager.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found after stop")
-    
+
     if success:
         return InstanceResponse(
-            instance=instance,
-            message=f"Instance {instance_id} stopped successfully"
+            instance=instance, message=f"Instance {instance_id} stopped successfully"
         )
     else:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to stop instance: {instance.error_message}"
+            status_code=500, detail=f"Failed to stop instance: {instance.error_message}"
         )
 
 
@@ -141,21 +138,20 @@ async def restart_instance(instance_id: str):
     instance = config_manager.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    
+
     success = await process_manager.restart_instance(instance_id)
     instance = config_manager.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found after restart")
-    
+
     if success:
         return InstanceResponse(
-            instance=instance,
-            message=f"Instance {instance_id} restarted successfully"
+            instance=instance, message=f"Instance {instance_id} restarted successfully"
         )
     else:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to restart instance: {instance.error_message}"
+            detail=f"Failed to restart instance: {instance.error_message}",
         )
 
 
@@ -167,7 +163,11 @@ async def get_instance_state(instance_id: str):
         raise HTTPException(status_code=404, detail="Instance not found")
 
     # Build current snapshot (ephemeral values default to safe values)
-    now_iso = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+    now_iso = (
+        __import__("datetime")
+        .datetime.now(__import__("datetime").timezone.utc)
+        .isoformat()
+    )
     return InstanceRuntimeState(
         instance_id=instance_id,
         busy=getattr(instance, "busy", False),
@@ -178,7 +178,9 @@ async def get_instance_state(instance_id: str):
 
 
 @router.get("/{instance_id}/last-generation", response_model=GenerationMetrics)
-async def get_last_generation(instance_id: str, after: Optional[str] = None, within_s: Optional[int] = None):
+async def get_last_generation(
+    instance_id: str, after: Optional[str] = None, within_s: Optional[int] = None
+):
     """Return most recent finished generation metrics for the instance.
 
     Optional filters:
@@ -197,11 +199,14 @@ async def get_last_generation(instance_id: str, after: Optional[str] = None, wit
     # Apply filters
     try:
         from datetime import datetime, timezone
+
         def parse_iso(ts: str | None):
             if not ts:
                 return None
             try:
-                return datetime.fromisoformat(ts.replace('Z', '+00:00')).astimezone(timezone.utc)
+                return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(
+                    timezone.utc
+                )
             except Exception:
                 return None
 
@@ -209,11 +214,17 @@ async def get_last_generation(instance_id: str, after: Optional[str] = None, wit
         if after:
             after_dt = parse_iso(after)
             if after_dt and finished_dt and finished_dt < after_dt:
-                raise HTTPException(status_code=404, detail="No generation metrics after the specified timestamp")
+                raise HTTPException(
+                    status_code=404,
+                    detail="No generation metrics after the specified timestamp",
+                )
         if within_s is not None and within_s >= 0:
             now_dt = datetime.now(timezone.utc)
             if finished_dt and (now_dt - finished_dt).total_seconds() > float(within_s):
-                raise HTTPException(status_code=404, detail="No recent generation metrics within the specified window")
+                raise HTTPException(
+                    status_code=404,
+                    detail="No recent generation metrics within the specified window",
+                )
     except HTTPException:
         raise
     except Exception:
@@ -221,4 +232,3 @@ async def get_last_generation(instance_id: str, after: Optional[str] = None, wit
         pass
 
     return metrics
-
