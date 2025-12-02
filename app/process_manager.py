@@ -66,7 +66,7 @@ class ProcessManager:
         self.instance_runners: Dict[str, BackendRunner] = {}
 
     def _is_port_available(self, port: int) -> bool:
-        """Check if a port is available."""
+        """Check if a port is available (not bound by any process)."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind(("", port))
@@ -74,11 +74,27 @@ class ProcessManager:
             except OSError:
                 return False
 
+    def _get_assigned_ports(self) -> set:
+        """Get all ports currently assigned to instances."""
+        assigned = set()
+        for instance in config_manager.get_all_instances():
+            if instance.port is not None:
+                assigned.add(instance.port)
+        return assigned
+
     def _get_available_port(self) -> int:
-        """Get an available port starting from settings.start_port."""
+        """Get an available port starting from settings.start_port.
+        
+        Checks both:
+        1. Ports already assigned to other instances (even if not yet bound)
+        2. Ports currently bound by any process
+        """
+        assigned_ports = self._get_assigned_ports()
         port = settings.start_port
-        while not self._is_port_available(port):
+        
+        while port in assigned_ports or not self._is_port_available(port):
             port += 1
+        
         return port
 
     def _read_logs(
