@@ -74,31 +74,22 @@ class ProcessManager:
             except OSError:
                 return False
 
-    def _get_assigned_ports(self, exclude_instance_id: Optional[str] = None) -> set:
-        """Get all ports currently assigned to instances.
-        
-        Args:
-            exclude_instance_id: Optional instance ID to exclude from the check
-                                 (used when reassigning port for that instance)
-        """
+    def _get_assigned_ports(self) -> set:
+        """Get ports assigned to currently running instances only."""
         assigned = set()
         for instance in config_manager.get_all_instances():
-            if instance.port is not None and instance.id != exclude_instance_id:
+            if instance.port is not None and instance.status == InstanceStatus.RUNNING:
                 assigned.add(instance.port)
         return assigned
 
-    def _get_available_port(self, exclude_instance_id: Optional[str] = None) -> int:
+    def _get_available_port(self) -> int:
         """Get the lowest available port starting from settings.start_port.
         
         Finds the first port (starting from start_port) that is:
-        1. Not assigned to another running/stopped instance
+        1. Not assigned to a currently running instance
         2. Not currently bound by any process
-        
-        Args:
-            exclude_instance_id: Instance ID to exclude from assigned port check
-                                 (allows reusing the same port if still free)
         """
-        assigned_ports = self._get_assigned_ports(exclude_instance_id)
+        assigned_ports = self._get_assigned_ports()
         port = settings.start_port
         
         while port in assigned_ports or not self._is_port_available(port):
@@ -220,9 +211,7 @@ class ProcessManager:
             return True
 
         # Always find an available port on start
-        # (previous port may now be in use by another process)
-        # Pass instance_id to allow reusing this instance's previous port if still free
-        instance.port = self._get_available_port(exclude_instance_id=instance_id)
+        instance.port = self._get_available_port()
 
         # Get the appropriate runner for this backend type
         runner = get_runner_for_config(instance.config)
