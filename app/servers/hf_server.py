@@ -27,10 +27,12 @@ from typing import Optional, List, Dict, Union, TYPE_CHECKING
 from contextlib import asynccontextmanager
 
 import torch
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Response
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 import uvicorn
+import json
 
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, PreTrainedTokenizer, PreTrainedTokenizerFast
@@ -333,11 +335,24 @@ async def lifespan(app: FastAPI):
 # App Setup
 # ============================================================================
 
+# Custom JSONResponse that ensures UTF-8 encoding
+class UTF8JSONResponse(JSONResponse):
+    def render(self, content) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+
 app = FastAPI(
     title="HuggingFace Server",
     description="OpenAI-compatible API for HuggingFace models",
     version="1.0.0",
     lifespan=lifespan,
+    default_response_class=UTF8JSONResponse,
 )
 
 
