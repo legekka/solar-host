@@ -80,12 +80,24 @@ class ClassifyRequest(BaseModel):
     input: Union[str, List[str]] = Field(
         ..., description="Text or list of texts to classify"
     )
+    return_all_scores: bool = Field(
+        default=False, description="Return scores for all classes, not just top prediction"
+    )
+
+
+class ClassifyScoreItem(BaseModel):
+    """Individual class score."""
+    label: str
+    score: float
 
 
 class ClassifyChoice(BaseModel):
     index: int
     label: str
     score: float
+    all_scores: Optional[List[ClassifyScoreItem]] = Field(
+        default=None, description="Scores for all classes (when return_all_scores=True)"
+    )
 
 
 class ClassifyResponse(BaseModel):
@@ -583,11 +595,27 @@ async def classify(request: ClassifyRequest, _: bool = Depends(verify_api_key)):
             if state.labels and best_idx < len(state.labels):
                 label = state.labels[best_idx]
 
+            # Build all_scores if requested
+            all_scores: Optional[List[ClassifyScoreItem]] = None
+            if request.return_all_scores:
+                all_scores = []
+                for class_idx in range(prob.shape[0]):
+                    class_label = str(class_idx)
+                    if state.labels and class_idx < len(state.labels):
+                        class_label = state.labels[class_idx]
+                    all_scores.append(
+                        ClassifyScoreItem(
+                            label=class_label,
+                            score=float(prob[class_idx].item()),
+                        )
+                    )
+
             choices.append(
                 ClassifyChoice(
                     index=i,
                     label=label,
                     score=best_score,
+                    all_scores=all_scores,
                 )
             )
 
