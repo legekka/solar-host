@@ -8,6 +8,7 @@ OpenAI-compatible API endpoints.
 Supports:
 - AutoModelForCausalLM: text generation (/v1/chat/completions, /v1/completions)
 - AutoModelForSequenceClassification: classification (/v1/classify)
+- AutoModel: embeddings (/v1/embeddings)
 
 Usage:
     python -m app.servers.hf_server \
@@ -27,7 +28,7 @@ from typing import Optional, List, Dict, Union, TYPE_CHECKING
 from contextlib import asynccontextmanager
 
 import torch
-from fastapi import FastAPI, HTTPException, Request, Depends, Response
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
@@ -35,7 +36,11 @@ import uvicorn
 import json
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer, PreTrainedTokenizerFast
+    from transformers import (
+        PreTrainedModel,
+        PreTrainedTokenizer,
+        PreTrainedTokenizerFast,
+    )
 
 # Configure logging to output structured messages for the runner to parse
 logging.basicConfig(
@@ -83,12 +88,14 @@ class ClassifyRequest(BaseModel):
         ..., description="Text or list of texts to classify"
     )
     return_all_scores: bool = Field(
-        default=False, description="Return scores for all classes, not just top prediction"
+        default=False,
+        description="Return scores for all classes, not just top prediction",
     )
 
 
 class ClassifyScoreItem(BaseModel):
     """Individual class score."""
+
     label: str
     score: float
 
@@ -147,6 +154,32 @@ class ModelInfo(BaseModel):
     owned_by: str = "huggingface"
 
 
+class EmbeddingRequest(BaseModel):
+    model: str
+    input: Union[str, List[str]] = Field(
+        ..., description="Text or list of texts to embed"
+    )
+    encoding_format: Optional[str] = Field(
+        default="float", description="Encoding format: 'float' or 'base64'"
+    )
+    dimensions: Optional[int] = Field(
+        default=None, description="Optional dimension truncation"
+    )
+
+
+class EmbeddingData(BaseModel):
+    object: str = "embedding"
+    embedding: List[float]
+    index: int
+
+
+class EmbeddingResponse(BaseModel):
+    object: str = "list"
+    data: List[EmbeddingData]
+    model: str
+    usage: Dict[str, int]
+
+
 # ============================================================================
 # Global State
 # ============================================================================
@@ -157,16 +190,19 @@ class ServerState:
 
     def __init__(self):
         self.model: Optional["PreTrainedModel"] = None
-        self.tokenizer: Optional[Union["PreTrainedTokenizer", "PreTrainedTokenizerFast"]] = None
+        self.tokenizer: Optional[
+            Union["PreTrainedTokenizer", "PreTrainedTokenizerFast"]
+        ] = None
         self.model_id: str = ""
         self.model_type: str = "causal"
         self.alias: str = ""
         self.device: str = "cpu"
         self.max_length: int = 4096
         self.labels: Optional[List[str]] = None
+        self.normalize_embeddings: bool = True
         self.api_key: str = ""
         self.created_at: int = int(datetime.now(timezone.utc).timestamp())
-    
+
     def ensure_loaded(self) -> None:
         """Ensure model and tokenizer are loaded, raise if not."""
         if self.model is None or self.tokenizer is None:
@@ -210,6 +246,7 @@ class ServerState:
         labels: Optional[List[str]],
         trust_remote_code: bool,
         use_flash_attention: bool,
+        normalize_embeddings: bool = True,
     ):
         """Load the model based on type."""
         from transformers import AutoTokenizer
@@ -220,6 +257,7 @@ class ServerState:
         self.device = self.get_device(device)
         self.max_length = max_length
         self.labels = labels
+        self.normalize_embeddings = normalize_embeddings
 
         model_dtype = self.get_dtype(dtype)
 
@@ -237,7 +275,7 @@ class ServerState:
         # Ensure pad token exists
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        
+
         self.tokenizer = tokenizer
 
         # Load model based on type
@@ -260,7 +298,7 @@ class ServerState:
             if self.device == "mps":
                 target_device = torch.device(self.device)
                 model = model.to(device=target_device)  # type: ignore[call-overload]
-            
+
             self.model = model
 
         elif model_type == "classification":
@@ -279,10 +317,20 @@ class ServerState:
             if self.labels is None and hasattr(model.config, "id2label"):
                 id2label = model.config.id2label
                 if id2label is not None:
-                    self.labels = [
-                        id2label[i]
-                        for i in range(len(id2label))
-                    ]
+                    self.labels = [id2label[i] for i in range(len(id2label))]
+
+        elif model_type == "embedding":
+            from transformers import AutoModel
+
+            model = AutoModel.from_pretrained(
+                model_id,
+                dtype=model_dtype,
+                trust_remote_code=trust_remote_code,
+            )
+            target_device = torch.device(self.device)
+            model = model.to(device=target_device)  # type: ignore[call-overload]
+            self.model = model
+            logger.info(f"Normalize embeddings: {self.normalize_embeddings}")
 
         if self.model is not None:
             self.model.eval()
@@ -334,6 +382,7 @@ async def lifespan(app: FastAPI):
 # ============================================================================
 # App Setup
 # ============================================================================
+
 
 # Custom JSONResponse that ensures UTF-8 encoding
 class UTF8JSONResponse(JSONResponse):
@@ -397,7 +446,7 @@ async def chat_completions(
         raise HTTPException(
             status_code=400, detail="Chat completions only available for causal models"
         )
-    
+
     # Ensure model is loaded
     state.ensure_loaded()
     model = state.model
@@ -488,7 +537,7 @@ async def completions(request: CompletionRequest, _: bool = Depends(verify_api_k
         raise HTTPException(
             status_code=400, detail="Completions only available for causal models"
         )
-    
+
     # Ensure model is loaded
     state.ensure_loaded()
     model = state.model
@@ -565,7 +614,7 @@ async def classify(request: ClassifyRequest, _: bool = Depends(verify_api_key)):
             status_code=400,
             detail="Classification only available for classification models",
         )
-    
+
     # Ensure model is loaded
     state.ensure_loaded()
     model = state.model
@@ -577,7 +626,9 @@ async def classify(request: ClassifyRequest, _: bool = Depends(verify_api_key)):
 
     try:
         # Handle single or batch input
-        texts: List[str] = request.input if isinstance(request.input, list) else [request.input]
+        texts: List[str] = (
+            request.input if isinstance(request.input, list) else [request.input]
+        )
 
         # Tokenize
         encoded = tokenizer(
@@ -654,6 +705,106 @@ async def classify(request: ClassifyRequest, _: bool = Depends(verify_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/v1/embeddings")
+async def embeddings(request: EmbeddingRequest, _: bool = Depends(verify_api_key)):
+    """Embeddings endpoint (OpenAI compatible).
+
+    Extracts the last hidden state from the model and applies mean pooling
+    to generate fixed-size embedding vectors.
+    """
+    if state.model_type != "embedding":
+        raise HTTPException(
+            status_code=400,
+            detail="Embeddings only available for embedding models",
+        )
+
+    # Ensure model is loaded
+    state.ensure_loaded()
+    model = state.model
+    tokenizer = state.tokenizer
+    assert model is not None and tokenizer is not None  # Type narrowing
+
+    start_time = time.time()
+    logger.info(f"[REQUEST] model={state.alias} endpoint=/v1/embeddings")
+
+    try:
+        # Handle single or batch input
+        texts: List[str] = (
+            request.input if isinstance(request.input, list) else [request.input]
+        )
+
+        # Tokenize
+        encoded = tokenizer(
+            texts,
+            return_tensors="pt",
+            truncation=True,
+            padding=True,
+            max_length=state.max_length,
+        )
+        inputs = encoded.to(state.device)
+
+        input_ids: torch.Tensor = inputs["input_ids"]  # type: ignore[assignment]
+        attention_mask: torch.Tensor = inputs["attention_mask"]  # type: ignore[assignment]
+        total_tokens: int = int(input_ids.numel())
+
+        # Forward pass to get last hidden state
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        # Get last hidden state: (batch_size, sequence_length, hidden_size)
+        last_hidden_state = outputs.last_hidden_state
+
+        # Mean pooling with attention mask
+        # Expand attention mask to match hidden state dimensions
+        input_mask_expanded = (
+            attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+        )
+        sum_embeddings = torch.sum(last_hidden_state * input_mask_expanded, dim=1)
+        sum_mask = input_mask_expanded.sum(dim=1)
+        sum_mask = torch.clamp(sum_mask, min=1e-9)
+        embeddings_tensor = sum_embeddings / sum_mask
+
+        # Optionally L2 normalize
+        if state.normalize_embeddings:
+            embeddings_tensor = torch.nn.functional.normalize(
+                embeddings_tensor, p=2, dim=1
+            )
+
+        # Optional dimension truncation
+        if request.dimensions is not None and request.dimensions > 0:
+            embeddings_tensor = embeddings_tensor[:, : request.dimensions]
+
+        # Convert to list
+        embeddings_list = embeddings_tensor.cpu().tolist()
+
+        # Build response data
+        data = [
+            EmbeddingData(
+                embedding=emb,
+                index=i,
+            )
+            for i, emb in enumerate(embeddings_list)
+        ]
+
+        elapsed_ms = (time.time() - start_time) * 1000
+        logger.info(
+            f"[COMPLETE] model={state.alias} tokens={total_tokens} time_ms={elapsed_ms:.1f}"
+        )
+
+        return EmbeddingResponse(
+            data=data,
+            model=state.alias,
+            usage={
+                "prompt_tokens": total_tokens,
+                "total_tokens": total_tokens,
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"[ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -665,7 +816,7 @@ def parse_args():
         "--model-id", required=True, help="HuggingFace model ID or path"
     )
     parser.add_argument(
-        "--model-type", choices=["causal", "classification"], required=True
+        "--model-type", choices=["causal", "classification", "embedding"], required=True
     )
     parser.add_argument("--alias", required=True, help="Model alias")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
@@ -684,6 +835,11 @@ def parse_args():
     )
     parser.add_argument(
         "--use-flash-attention", action="store_true", help="Use Flash Attention 2"
+    )
+    parser.add_argument(
+        "--normalize-embeddings",
+        action="store_true",
+        help="L2 normalize embedding vectors",
     )
     return parser.parse_args()
 
@@ -710,6 +866,7 @@ def main():
         labels=labels,
         trust_remote_code=args.trust_remote_code,
         use_flash_attention=args.use_flash_attention,
+        normalize_embeddings=args.normalize_embeddings,
     )
 
     # Run server

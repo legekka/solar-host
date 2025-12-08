@@ -10,6 +10,7 @@ from app.models.llamacpp import LlamaCppConfig
 from app.models.huggingface import (
     HuggingFaceCausalConfig,
     HuggingFaceClassificationConfig,
+    HuggingFaceEmbeddingConfig,
 )
 
 
@@ -69,6 +70,8 @@ def parse_instance_config(config_data: Dict[str, Any]) -> Any:
         return HuggingFaceCausalConfig(**config_data)
     elif backend_type == "huggingface_classification":
         return HuggingFaceClassificationConfig(**config_data)
+    elif backend_type == "huggingface_embedding":
+        return HuggingFaceEmbeddingConfig(**config_data)
     else:
         # Fallback to llamacpp
         return LlamaCppConfig(**config_data)
