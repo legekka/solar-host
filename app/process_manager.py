@@ -35,8 +35,10 @@ def get_runner_for_config(config) -> BackendRunner:
     elif backend_type in (
         BackendType.HUGGINGFACE_CAUSAL,
         BackendType.HUGGINGFACE_CLASSIFICATION,
+        BackendType.HUGGINGFACE_EMBEDDING,
         "huggingface_causal",
         "huggingface_classification",
+        "huggingface_embedding",
     ):
         return HuggingFaceRunner()
     else:
@@ -85,17 +87,17 @@ class ProcessManager:
 
     def _get_available_port(self) -> int:
         """Get the lowest available port starting from settings.start_port.
-        
+
         Finds the first port (starting from start_port) that is:
         1. Not assigned to a currently running instance
         2. Not currently bound by any process
         """
         assigned_ports = self._get_assigned_ports()
         port = settings.start_port
-        
+
         while port in assigned_ports or not self._is_port_available(port):
             port += 1
-        
+
         return port
 
     def _read_logs(
@@ -391,7 +393,7 @@ class ProcessManager:
         # Parse config if it's a dict (from FastAPI request body)
         if isinstance(config, dict):
             config = parse_instance_config(config)
-        
+
         instance_id = str(uuid.uuid4())
 
         # Determine supported endpoints based on backend type

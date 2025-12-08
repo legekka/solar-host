@@ -12,6 +12,7 @@ class BackendType(str, Enum):
     LLAMACPP = "llamacpp"
     HUGGINGFACE_CAUSAL = "huggingface_causal"
     HUGGINGFACE_CLASSIFICATION = "huggingface_classification"
+    HUGGINGFACE_EMBEDDING = "huggingface_embedding"
 
 
 class InstanceStatus(str, Enum):

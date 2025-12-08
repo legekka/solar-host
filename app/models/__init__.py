@@ -24,11 +24,17 @@ from app.models.llamacpp import LlamaCppConfig
 from app.models.huggingface import (
     HuggingFaceCausalConfig,
     HuggingFaceClassificationConfig,
+    HuggingFaceEmbeddingConfig,
 )
 
 # Create the discriminated union type for InstanceConfig
 InstanceConfig = Annotated[
-    Union[LlamaCppConfig, HuggingFaceCausalConfig, HuggingFaceClassificationConfig],
+    Union[
+        LlamaCppConfig,
+        HuggingFaceCausalConfig,
+        HuggingFaceClassificationConfig,
+        HuggingFaceEmbeddingConfig,
+    ],
     Field(discriminator="backend_type"),
 ]
 
@@ -42,6 +48,7 @@ __all__ = [
     "LlamaCppConfig",
     "HuggingFaceCausalConfig",
     "HuggingFaceClassificationConfig",
+    "HuggingFaceEmbeddingConfig",
     # Instance models
     "Instance",
     "InstanceCreate",

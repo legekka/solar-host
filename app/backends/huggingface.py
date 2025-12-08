@@ -11,7 +11,7 @@ from app.models.base import InstancePhase, GenerationMetrics, BackendType
 class HuggingFaceRunner(BackendRunner):
     """Backend runner for HuggingFace model instances.
 
-    Supports both AutoModelForCausalLM and AutoModelForSequenceClassification.
+    Supports AutoModelForCausalLM, AutoModelForSequenceClassification, and AutoModel (embeddings).
     Spawns the hf_server.py process which provides OpenAI-compatible endpoints.
     """
 
@@ -44,6 +44,11 @@ class HuggingFaceRunner(BackendRunner):
             or backend_type == "huggingface_classification"
         ):
             model_type = "classification"
+        elif (
+            backend_type == BackendType.HUGGINGFACE_EMBEDDING
+            or backend_type == "huggingface_embedding"
+        ):
+            model_type = "embedding"
         else:
             model_type = "causal"  # fallback
 
@@ -81,6 +86,10 @@ class HuggingFaceRunner(BackendRunner):
         if model_type == "classification" and getattr(config, "labels", None):
             cmd.extend(["--labels", ",".join(config.labels)])
 
+        # For embedding models, pass normalize flag if specified
+        if model_type == "embedding" and getattr(config, "normalize_embeddings", True):
+            cmd.append("--normalize-embeddings")
+
         return cmd
 
     def get_health_endpoint(self) -> str:
@@ -117,6 +126,15 @@ class HuggingFaceRunner(BackendRunner):
         ):
             return [
                 "/v1/classify",
+                "/v1/models",
+                "/health",
+            ]
+        elif (
+            backend_type == BackendType.HUGGINGFACE_EMBEDDING
+            or backend_type == "huggingface_embedding"
+        ):
+            return [
+                "/v1/embeddings",
                 "/v1/models",
                 "/health",
             ]

@@ -61,7 +61,7 @@ async def update_instance(instance_id: str, data: InstanceUpdate):
         config = data.config
         if isinstance(config, dict):
             config = parse_instance_config(config)
-        
+
         instance.config = config
         config_manager.update_instance(instance_id, instance)
         return InstanceResponse(
