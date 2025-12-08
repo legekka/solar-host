@@ -15,12 +15,18 @@ from typing import Optional, Dict, Any
 from collections import deque
 from enum import Enum
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from websockets.client import WebSocketClientProtocol
+
 try:
     import websockets
-    from websockets.client import WebSocketClientProtocol
+
+    HAS_WEBSOCKETS = True
 except ImportError:
     websockets = None  # type: ignore
-    WebSocketClientProtocol = None  # type: ignore
+    HAS_WEBSOCKETS = False
 
 
 class WSMessageType(str, Enum):
@@ -30,15 +36,19 @@ class WSMessageType(str, Enum):
     LOG = "log"
     INSTANCE_STATE = "instance_state"
     HOST_HEALTH = "host_health"
+    INSTANCES_UPDATE = "instances_update"
 
 
 class SolarControlClient:
-    """WebSocket client for maintaining persistent connection to solar-control."""
+    """WebSocket client for maintaining persistent connection to solar-control.
+
+    Identification: The host identifies itself using its API key. Solar-control
+    looks up which registered host has this API key and associates the connection.
+    """
 
     def __init__(
         self,
         control_url: str,
-        host_id: str,
         api_key: str,
         host_name: str = "",
         reconnect_delay: float = 1.0,
@@ -47,15 +57,17 @@ class SolarControlClient:
         max_queue_size: int = 1000,
     ):
         self.control_url = control_url
-        self.host_id = host_id
-        self.api_key = api_key
-        self.host_name = host_name or host_id
+        self.api_key = api_key  # Used to identify this host to solar-control
+        self.host_name = host_name
         self.reconnect_delay = reconnect_delay
         self.max_reconnect_delay = max_reconnect_delay
         self.ping_interval = ping_interval
         self.max_queue_size = max_queue_size
 
-        self._ws: Optional[WebSocketClientProtocol] = None
+        # Host ID assigned by solar-control after registration
+        self.host_id: Optional[str] = None
+
+        self._ws: Optional["WebSocketClientProtocol"] = None
         self._connected = False
         self._running = False
         self._current_delay = reconnect_delay
@@ -76,11 +88,14 @@ class SolarControlClient:
             print("SolarControlClient: No control URL configured, skipping connection")
             return
 
-        if websockets is None:
+        if not HAS_WEBSOCKETS:
             print(
                 "SolarControlClient: websockets library not installed, skipping connection"
             )
             return
+
+        # Store the main event loop for thread-safe async calls
+        self._main_loop = asyncio.get_running_loop()
 
         self._running = True
         self._connection_task = asyncio.create_task(self._connection_loop())
@@ -141,7 +156,7 @@ class SolarControlClient:
 
     async def _connect_and_run(self):
         """Connect to solar-control and run the message loop."""
-        if websockets is None:
+        if not HAS_WEBSOCKETS or websockets is None:
             return
 
         async with websockets.connect(self.control_url) as ws:
@@ -159,7 +174,12 @@ class SolarControlClient:
                     raise Exception(f"Registration failed: {msg.get('message')}")
                 if msg.get("type") != "registration_ack":
                     raise Exception(f"Unexpected response: {msg}")
-                print(f"SolarControlClient: Registered as host '{self.host_id}'")
+                # Store the host_id assigned by solar-control
+                self.host_id = msg.get("host_id")
+                host_name = msg.get("host_name", self.host_id)
+                print(
+                    f"SolarControlClient: Registered as '{host_name}' (id: {self.host_id})"
+                )
             except asyncio.TimeoutError:
                 raise Exception("Registration acknowledgement timeout")
 
@@ -194,7 +214,11 @@ class SolarControlClient:
                     self._queue_task.cancel()
 
     async def _send_registration(self):
-        """Send registration message to solar-control."""
+        """Send registration message to solar-control.
+
+        The host identifies itself using its API key. Solar-control will
+        look up which registered host has this API key.
+        """
         if not self._ws:
             return
 
@@ -215,9 +239,8 @@ class SolarControlClient:
         registration = {
             "type": WSMessageType.REGISTRATION.value,
             "data": {
-                "host_id": self.host_id,
-                "api_key": self.api_key,
-                "host_name": self.host_name,
+                "api_key": self.api_key,  # Used to identify this host
+                "host_name": self.host_name,  # Optional display name override
                 "instances": instances,
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -270,13 +293,28 @@ class SolarControlClient:
             self._event_queue.append(event)
 
     async def send_log(
-        self, instance_id: str, seq: int, line: str, level: str = "info"
+        self,
+        instance_id: str,
+        seq: int,
+        line: str,
+        timestamp: Optional[str] = None,
+        level: str = "info",
     ):
-        """Send a log message to solar-control."""
+        """Send a log message to solar-control.
+
+        Args:
+            instance_id: The instance ID
+            seq: Log sequence number
+            line: Log line content
+            timestamp: Optional timestamp string (uses current local time if not provided)
+            level: Log level
+        """
+        # Use provided timestamp or generate one in local time format (matching REST API)
+        ts = timestamp or datetime.now().isoformat()
         event = {
             "type": WSMessageType.LOG.value,
             "instance_id": instance_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": ts,
             "data": {
                 "seq": seq,
                 "line": line,
@@ -317,6 +355,37 @@ class SolarControlClient:
         }
         await self.send_event(event)
 
+    async def send_instances_update(self):
+        """Send full instance list to solar-control.
+
+        Called when instances change (create, delete, start, stop).
+        """
+        from app.config import config_manager
+
+        instances = []
+        for instance in config_manager.get_all_instances():
+            instances.append(
+                {
+                    "id": instance.id,
+                    "alias": instance.config.alias,
+                    "status": instance.status.value,
+                    "port": instance.port,
+                    "supported_endpoints": instance.supported_endpoints,
+                    "backend_type": getattr(
+                        instance.config, "backend_type", "llamacpp"
+                    ),
+                }
+            )
+
+        event = {
+            "type": WSMessageType.INSTANCES_UPDATE.value,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": {
+                "instances": instances,
+            },
+        }
+        await self.send_event(event)
+
 
 # Global client instance (initialized in main.py)
 solar_control_client: Optional[SolarControlClient] = None
@@ -328,22 +397,25 @@ def get_client() -> Optional[SolarControlClient]:
 
 
 def init_client(settings) -> Optional[SolarControlClient]:
-    """Initialize the global solar-control client from settings."""
+    """Initialize the global solar-control client from settings.
+
+    The host identifies itself to solar-control using its API key.
+    Solar-control will look up which registered host has this API key.
+    """
     global solar_control_client
 
     if not settings.solar_control_url:
         print("SolarControlClient: SOLAR_CONTROL_URL not configured")
         return None
 
-    if not settings.host_id:
-        print("SolarControlClient: HOST_ID not configured")
+    if not settings.api_key:
+        print("SolarControlClient: API_KEY not configured")
         return None
 
     solar_control_client = SolarControlClient(
         control_url=settings.solar_control_url,
-        host_id=settings.host_id,
-        api_key=settings.solar_control_api_key,
-        host_name=settings.host_name or settings.host_id,
+        api_key=settings.api_key,  # Host's own API key, used for identification
+        host_name=settings.host_name,
         reconnect_delay=settings.ws_reconnect_delay,
         max_reconnect_delay=settings.ws_reconnect_max_delay,
         ping_interval=settings.ws_ping_interval,

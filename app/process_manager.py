@@ -134,13 +134,14 @@ class ProcessManager:
                     seq = self.log_sequences[instance_id]
                     self.log_sequences[instance_id] += 1
 
+                    timestamp = datetime.now().isoformat()
                     log_msg = LogMessage(
-                        seq=seq, timestamp=datetime.now().isoformat(), line=decoded_line
+                        seq=seq, timestamp=timestamp, line=decoded_line
                     )
                     self.log_buffers[instance_id].append(log_msg)
 
                     # Push log to solar-control via WebSocket
-                    self._push_log_event(instance_id, seq, decoded_line)
+                    self._push_log_event(instance_id, seq, decoded_line, timestamp)
 
                     # Parse log line using backend runner
                     try:
@@ -156,22 +157,19 @@ class ProcessManager:
         except Exception as e:
             print(f"Error reading logs for {instance_id}: {e}")
 
-    def _push_log_event(self, instance_id: str, seq: int, line: str):
+    def _push_log_event(self, instance_id: str, seq: int, line: str, timestamp: str):
         """Push a log event to solar-control (thread-safe)."""
         try:
             client = get_client()
             if client and client.is_connected:
-                # Schedule the async send in the event loop
                 import asyncio
 
-                try:
-                    loop = asyncio.get_running_loop()
+                # Get the main event loop (stored when the app starts)
+                loop = getattr(client, "_main_loop", None)
+                if loop and loop.is_running():
                     asyncio.run_coroutine_threadsafe(
-                        client.send_log(instance_id, seq, line), loop
+                        client.send_log(instance_id, seq, line, timestamp), loop
                     )
-                except RuntimeError:
-                    # No running loop, skip
-                    pass
         except Exception:
             # Never let WS errors break logging
             pass
@@ -243,14 +241,12 @@ class ProcessManager:
                     "checkpoint_total": state.checkpoint_total,
                 }
 
-                try:
-                    loop = asyncio.get_running_loop()
+                # Get the main event loop (stored when the app starts)
+                loop = getattr(client, "_main_loop", None)
+                if loop and loop.is_running():
                     asyncio.run_coroutine_threadsafe(
                         client.send_instance_state(instance_id, state_dict), loop
                     )
-                except RuntimeError:
-                    # No running loop, skip
-                    pass
         except Exception:
             # Never let WS errors break state emission
             pass
@@ -349,6 +345,9 @@ class ProcessManager:
                     instance_id, self.instance_contexts[instance_id]
                 )
 
+                # Notify solar-control of instance update
+                self._push_instances_update()
+
                 return True
             else:
                 # Process failed
@@ -423,6 +422,9 @@ class ProcessManager:
             # Clean up old log file for stopped instances
             await self._cleanup_old_logs(instance.config.alias)
 
+            # Notify solar-control of instance update
+            self._push_instances_update()
+
             return True
 
         except Exception as e:
@@ -473,6 +475,10 @@ class ProcessManager:
             supported_endpoints=supported_endpoints,
         )
         config_manager.add_instance(instance)
+
+        # Notify solar-control of instance update
+        self._push_instances_update()
+
         return instance
 
     def get_log_buffer(self, instance_id: str) -> List[LogMessage]:
@@ -494,6 +500,36 @@ class ProcessManager:
     def get_state_next_sequence(self, instance_id: str) -> int:
         """Get next state sequence number for an instance."""
         return self.state_sequences.get(instance_id, 0)
+
+    def _push_instances_update(self):
+        """Push instance list update to solar-control (thread-safe)."""
+        try:
+            client = get_client()
+            if client and client.is_connected:
+                import asyncio
+
+                # Get the main event loop (stored when the app starts)
+                loop = getattr(client, "_main_loop", None)
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        client.send_instances_update(), loop
+                    )
+        except Exception:
+            # Never let WS errors break instance operations
+            pass
+
+    def delete_instance(self, instance_id: str) -> bool:
+        """Delete an instance and notify solar-control."""
+        instance = config_manager.get_instance(instance_id)
+        if not instance:
+            return False
+
+        config_manager.remove_instance(instance_id)
+
+        # Notify solar-control of instance update
+        self._push_instances_update()
+
+        return True
 
     async def auto_restart_running_instances(self):
         """Auto-restart instances that were running before shutdown."""

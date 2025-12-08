@@ -27,10 +27,10 @@ class Settings(BaseSettings):
     log_buffer_size: int = 1000
 
     # Solar-control connection settings (WebSocket 2.0)
-    solar_control_url: str = ""  # e.g., "ws://localhost:8000/ws/host-channel"
-    solar_control_api_key: str = ""  # API key for solar-control authentication
-    host_id: str = ""  # Unique host ID (must match ID registered in solar-control)
-    host_name: str = ""  # Human-readable host name
+    # URL to solar-control's host channel endpoint (e.g., "ws://localhost:8000/ws/host-channel")
+    solar_control_url: str = ""
+    # Human-readable host name (optional, for display in webui)
+    host_name: str = ""
     ws_reconnect_delay: float = 1.0  # Initial reconnect delay in seconds
     ws_reconnect_max_delay: float = 30.0  # Maximum reconnect delay
     ws_ping_interval: float = 25.0  # Ping interval in seconds
