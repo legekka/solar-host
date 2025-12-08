@@ -24,6 +24,7 @@ from app.config import settings, config_manager, parse_instance_config
 from app.backends.base import BackendRunner
 from app.backends.llamacpp import LlamaCppRunner
 from app.backends.huggingface import HuggingFaceRunner
+from app.ws_client import get_client
 
 
 def get_runner_for_config(config) -> BackendRunner:
@@ -138,6 +139,9 @@ class ProcessManager:
                     )
                     self.log_buffers[instance_id].append(log_msg)
 
+                    # Push log to solar-control via WebSocket
+                    self._push_log_event(instance_id, seq, decoded_line)
+
                     # Parse log line using backend runner
                     try:
                         context = self.instance_contexts.get(instance_id, {})
@@ -151,6 +155,26 @@ class ProcessManager:
                         pass
         except Exception as e:
             print(f"Error reading logs for {instance_id}: {e}")
+
+    def _push_log_event(self, instance_id: str, seq: int, line: str):
+        """Push a log event to solar-control (thread-safe)."""
+        try:
+            client = get_client()
+            if client and client.is_connected:
+                # Schedule the async send in the event loop
+                import asyncio
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    asyncio.run_coroutine_threadsafe(
+                        client.send_log(instance_id, seq, line), loop
+                    )
+                except RuntimeError:
+                    # No running loop, skip
+                    pass
+        except Exception:
+            # Never let WS errors break logging
+            pass
 
     def _emit_state_event(self, instance_id: str, update):
         """Emit a state event from a RuntimeStateUpdate."""
@@ -193,6 +217,43 @@ class ProcessManager:
             data=state,
         )
         self.state_buffers[instance_id].append(event)
+
+        # Push state to solar-control via WebSocket
+        self._push_state_event(instance_id, state)
+
+    def _push_state_event(self, instance_id: str, state: InstanceRuntimeState):
+        """Push an instance state event to solar-control (thread-safe)."""
+        try:
+            client = get_client()
+            if client and client.is_connected:
+                import asyncio
+
+                state_dict = {
+                    "busy": state.busy,
+                    "phase": state.phase.value if state.phase else None,
+                    "prefill_progress": state.prefill_progress,
+                    "active_slots": state.active_slots,
+                    "slot_id": state.slot_id,
+                    "task_id": state.task_id,
+                    "prefill_prompt_tokens": state.prefill_prompt_tokens,
+                    "generated_tokens": state.generated_tokens,
+                    "decode_tps": state.decode_tps,
+                    "decode_ms_per_token": state.decode_ms_per_token,
+                    "checkpoint_index": state.checkpoint_index,
+                    "checkpoint_total": state.checkpoint_total,
+                }
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    asyncio.run_coroutine_threadsafe(
+                        client.send_instance_state(instance_id, state_dict), loop
+                    )
+                except RuntimeError:
+                    # No running loop, skip
+                    pass
+        except Exception:
+            # Never let WS errors break state emission
+            pass
 
     def get_last_generation(self, instance_id: str) -> Optional[GenerationMetrics]:
         """Get the last generation metrics for an instance."""
