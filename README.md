@@ -8,6 +8,7 @@ A multi-backend process manager for model inference servers with REST API and We
   - llama.cpp (llama-server) for GGUF models
   - HuggingFace AutoModelForCausalLM for text generation
   - HuggingFace AutoModelForSequenceClassification for classification
+  - HuggingFace AutoModel for embeddings (last hidden state with mean pooling)
 - Auto-assign ports starting from 3500
 - Persistent configuration with auto-restart on boot
 - Real-time log streaming via WebSocket
@@ -76,13 +77,14 @@ Open your browser to: **http://localhost:8001/docs**
 
 ## Backend Types
 
-Solar Host supports three backend types:
+Solar Host supports four backend types:
 
 | Backend Type | Model Type | Endpoints Supported |
 |--------------|------------|---------------------|
 | `llamacpp` | GGUF models via llama-server | `/v1/chat/completions`, `/v1/completions` |
 | `huggingface_causal` | HuggingFace AutoModelForCausalLM | `/v1/chat/completions`, `/v1/completions` |
 | `huggingface_classification` | HuggingFace AutoModelForSequenceClassification | `/v1/classify` |
+| `huggingface_embedding` | HuggingFace AutoModel (last hidden state) | `/v1/embeddings` |
 
 ## Managing Instances
 
@@ -147,6 +149,27 @@ curl -X POST http://localhost:8001/instances \
       "dtype": "auto",
       "max_length": 512,
       "labels": ["negative", "positive"],
+      "host": "0.0.0.0",
+      "api_key": "instance-key"
+    }
+  }'
+```
+
+### Creating a HuggingFace Embedding Instance
+
+```bash
+curl -X POST http://localhost:8001/instances \
+  -H "X-API-Key: your-secret-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config": {
+      "backend_type": "huggingface_embedding",
+      "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+      "alias": "embed:minilm",
+      "device": "auto",
+      "dtype": "auto",
+      "max_length": 512,
+      "normalize_embeddings": true,
       "host": "0.0.0.0",
       "api_key": "instance-key"
     }
@@ -257,6 +280,22 @@ All requests require an `X-API-Key` header with your configured API key from the
 | `port` | No | auto | Port (auto-assigned if not specified) |
 | `api_key` | Yes | - | API key for this instance |
 
+### HuggingFace Embedding Config Parameters
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `backend_type` | Yes | - | Must be `"huggingface_embedding"` |
+| `model_id` | Yes | - | HuggingFace model ID or local path |
+| `alias` | Yes | - | Model alias for routing |
+| `device` | No | `"auto"` | Device: `auto`, `cuda`, `mps`, `cpu` |
+| `dtype` | No | `"auto"` | Data type: `auto`, `float16`, `bfloat16`, `float32` |
+| `max_length` | No | 512 | Maximum sequence length |
+| `normalize_embeddings` | No | true | L2 normalize output embedding vectors |
+| `trust_remote_code` | No | false | Trust remote code from HuggingFace |
+| `host` | No | "0.0.0.0" | Host to bind to |
+| `port` | No | auto | Port (auto-assigned if not specified) |
+| `api_key` | Yes | - | API key for this instance |
+
 ### Device Options
 
 | Device | Description |
@@ -324,6 +363,20 @@ All requests require an `X-API-Key` header with your configured API key from the
   "max_length": 512,
   "labels": ["negative", "neutral", "positive"],
   "api_key": "sentiment-key"
+}
+```
+
+### HuggingFace - Embedding Model
+
+```json
+{
+  "backend_type": "huggingface_embedding",
+  "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+  "alias": "embed:minilm",
+  "device": "cuda",
+  "max_length": 512,
+  "normalize_embeddings": true,
+  "api_key": "embed-key"
 }
 ```
 
@@ -435,6 +488,7 @@ Your instances will be accessible through the unified OpenAI-compatible gateway:
 - `/v1/chat/completions` - Chat completion (llamacpp, huggingface_causal)
 - `/v1/completions` - Text completion (llamacpp, huggingface_causal)
 - `/v1/classify` - Classification (huggingface_classification)
+- `/v1/embeddings` - Embeddings (huggingface_embedding)
 
 ## Backward Compatibility
 
