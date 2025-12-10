@@ -9,6 +9,7 @@ from app.models import (
     InstanceStatus,
     InstanceRuntimeState,
     GenerationMetrics,
+    LogMessage,
 )
 from app.config import config_manager, parse_instance_config
 from app.process_manager import process_manager
@@ -84,7 +85,8 @@ async def delete_instance(instance_id: str):
         )
 
     try:
-        config_manager.remove_instance(instance_id)
+        # Use process_manager to delete (notifies solar-control)
+        process_manager.delete_instance(instance_id)
         return InstanceResponse(
             instance=instance, message=f"Instance {instance_id} deleted successfully"
         )
@@ -180,6 +182,20 @@ async def get_instance_state(instance_id: str):
         active_slots=getattr(instance, "active_slots", 0),
         timestamp=now_iso,
     )
+
+
+@router.get("/{instance_id}/logs", response_model=List[LogMessage])
+async def get_instance_logs(instance_id: str):
+    """Get buffered logs for an instance.
+
+    Returns the in-memory log buffer (last N log lines).
+    """
+    instance = config_manager.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    logs = process_manager.get_log_buffer(instance_id)
+    return logs
 
 
 @router.get("/{instance_id}/last-generation", response_model=GenerationMetrics)

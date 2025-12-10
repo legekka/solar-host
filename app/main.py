@@ -2,10 +2,26 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+import asyncio
 
 from app.config import settings
 from app.process_manager import process_manager
 from app.routes import instances, websockets
+from app.ws_client import init_client, get_client
+
+
+async def health_report_loop():
+    """Periodically send health updates to solar-control."""
+    while True:
+        try:
+            await asyncio.sleep(10)  # Report every 10 seconds
+            client = get_client()
+            if client and client.is_connected:
+                await client.send_health()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Health report error: {e}")
 
 
 @asynccontextmanager
@@ -14,6 +30,17 @@ async def lifespan(app: FastAPI):
     # Startup: Auto-restart instances that were running
     print("Starting Solar Host...")
     print(f"API Key configured: {settings.api_key[:4]}...")
+
+    # Initialize and start solar-control WebSocket client
+    client = init_client(settings)
+    health_task = None
+    if client:
+        await client.start()
+        health_task = asyncio.create_task(health_report_loop())
+        print("Solar Control WebSocket client started")
+    else:
+        print("Solar Control WebSocket client not configured (standalone mode)")
+
     await process_manager.auto_restart_running_instances()
     print("Solar Host started successfully")
 
@@ -21,6 +48,16 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: Clean up
     print("Shutting down Solar Host...")
+
+    if health_task:
+        health_task.cancel()
+        try:
+            await health_task
+        except asyncio.CancelledError:
+            pass
+
+    if client:
+        await client.stop()
 
 
 app = FastAPI(

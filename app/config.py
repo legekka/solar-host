@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     max_retries: int = 2
     log_buffer_size: int = 1000
 
+    # Solar-control connection settings (WebSocket 2.0)
+    # URL to solar-control's host channel endpoint (e.g., "ws://localhost:8000/ws/host-channel")
+    solar_control_url: str = ""
+    # Human-readable host name (optional, for display in webui)
+    host_name: str = ""
+    ws_reconnect_delay: float = 1.0  # Initial reconnect delay in seconds
+    ws_reconnect_max_delay: float = 30.0  # Maximum reconnect delay
+    ws_ping_interval: float = 25.0  # Ping interval in seconds
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

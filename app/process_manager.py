@@ -24,6 +24,7 @@ from app.config import settings, config_manager, parse_instance_config
 from app.backends.base import BackendRunner
 from app.backends.llamacpp import LlamaCppRunner
 from app.backends.huggingface import HuggingFaceRunner
+from app.ws_client import get_client
 
 
 def get_runner_for_config(config) -> BackendRunner:
@@ -133,10 +134,14 @@ class ProcessManager:
                     seq = self.log_sequences[instance_id]
                     self.log_sequences[instance_id] += 1
 
+                    timestamp = datetime.now().isoformat()
                     log_msg = LogMessage(
-                        seq=seq, timestamp=datetime.now().isoformat(), line=decoded_line
+                        seq=seq, timestamp=timestamp, line=decoded_line
                     )
                     self.log_buffers[instance_id].append(log_msg)
+
+                    # Push log to solar-control via WebSocket
+                    self._push_log_event(instance_id, seq, decoded_line, timestamp)
 
                     # Parse log line using backend runner
                     try:
@@ -151,6 +156,23 @@ class ProcessManager:
                         pass
         except Exception as e:
             print(f"Error reading logs for {instance_id}: {e}")
+
+    def _push_log_event(self, instance_id: str, seq: int, line: str, timestamp: str):
+        """Push a log event to solar-control (thread-safe)."""
+        try:
+            client = get_client()
+            if client and client.is_connected:
+                import asyncio
+
+                # Get the main event loop (stored when the app starts)
+                loop = getattr(client, "_main_loop", None)
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        client.send_log(instance_id, seq, line, timestamp), loop
+                    )
+        except Exception:
+            # Never let WS errors break logging
+            pass
 
     def _emit_state_event(self, instance_id: str, update):
         """Emit a state event from a RuntimeStateUpdate."""
@@ -193,6 +215,41 @@ class ProcessManager:
             data=state,
         )
         self.state_buffers[instance_id].append(event)
+
+        # Push state to solar-control via WebSocket
+        self._push_state_event(instance_id, state)
+
+    def _push_state_event(self, instance_id: str, state: InstanceRuntimeState):
+        """Push an instance state event to solar-control (thread-safe)."""
+        try:
+            client = get_client()
+            if client and client.is_connected:
+                import asyncio
+
+                state_dict = {
+                    "busy": state.busy,
+                    "phase": state.phase.value if state.phase else None,
+                    "prefill_progress": state.prefill_progress,
+                    "active_slots": state.active_slots,
+                    "slot_id": state.slot_id,
+                    "task_id": state.task_id,
+                    "prefill_prompt_tokens": state.prefill_prompt_tokens,
+                    "generated_tokens": state.generated_tokens,
+                    "decode_tps": state.decode_tps,
+                    "decode_ms_per_token": state.decode_ms_per_token,
+                    "checkpoint_index": state.checkpoint_index,
+                    "checkpoint_total": state.checkpoint_total,
+                }
+
+                # Get the main event loop (stored when the app starts)
+                loop = getattr(client, "_main_loop", None)
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        client.send_instance_state(instance_id, state_dict), loop
+                    )
+        except Exception:
+            # Never let WS errors break state emission
+            pass
 
     def get_last_generation(self, instance_id: str) -> Optional[GenerationMetrics]:
         """Get the last generation metrics for an instance."""
@@ -288,6 +345,9 @@ class ProcessManager:
                     instance_id, self.instance_contexts[instance_id]
                 )
 
+                # Notify solar-control of instance update
+                self._push_instances_update()
+
                 return True
             else:
                 # Process failed
@@ -362,6 +422,9 @@ class ProcessManager:
             # Clean up old log file for stopped instances
             await self._cleanup_old_logs(instance.config.alias)
 
+            # Notify solar-control of instance update
+            self._push_instances_update()
+
             return True
 
         except Exception as e:
@@ -412,6 +475,10 @@ class ProcessManager:
             supported_endpoints=supported_endpoints,
         )
         config_manager.add_instance(instance)
+
+        # Notify solar-control of instance update
+        self._push_instances_update()
+
         return instance
 
     def get_log_buffer(self, instance_id: str) -> List[LogMessage]:
@@ -433,6 +500,36 @@ class ProcessManager:
     def get_state_next_sequence(self, instance_id: str) -> int:
         """Get next state sequence number for an instance."""
         return self.state_sequences.get(instance_id, 0)
+
+    def _push_instances_update(self):
+        """Push instance list update to solar-control (thread-safe)."""
+        try:
+            client = get_client()
+            if client and client.is_connected:
+                import asyncio
+
+                # Get the main event loop (stored when the app starts)
+                loop = getattr(client, "_main_loop", None)
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        client.send_instances_update(), loop
+                    )
+        except Exception:
+            # Never let WS errors break instance operations
+            pass
+
+    def delete_instance(self, instance_id: str) -> bool:
+        """Delete an instance and notify solar-control."""
+        instance = config_manager.get_instance(instance_id)
+        if not instance:
+            return False
+
+        config_manager.remove_instance(instance_id)
+
+        # Notify solar-control of instance update
+        self._push_instances_update()
+
+        return True
 
     async def auto_restart_running_instances(self):
         """Auto-restart instances that were running before shutdown."""
