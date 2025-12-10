@@ -68,7 +68,7 @@ class HuggingFaceRunner(BackendRunner):
             "--port",
             str(instance.port),
             "--api-key",
-            config.api_key or settings.api_key,
+            settings.api_key,
             "--device",
             config.device,
             "--dtype",

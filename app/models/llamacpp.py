@@ -1,15 +1,26 @@
 """LlamaCpp backend configuration models."""
 
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from pydantic import BaseModel, Field, model_validator
+from typing import Optional, Literal, Any
 
 
 class LlamaCppConfig(BaseModel):
-    """Configuration for a llama.cpp server instance."""
+    """Configuration for a llama.cpp server instance.
+    
+    Note: api_key is NOT a config parameter - instances always use the host's API key.
+    """
 
     backend_type: Literal["llamacpp"] = Field(
         default="llamacpp", description="Backend type identifier"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_api_key(cls, data: Any) -> Any:
+        """Remove api_key from old configs - instances use host API key."""
+        if isinstance(data, dict):
+            data.pop("api_key", None)
+        return data
     model: str = Field(..., description="Path to the GGUF model file")
     alias: str = Field(..., description="Model alias (e.g., gpt-oss:120b)")
     threads: int = Field(default=1, description="Number of threads")
@@ -25,10 +36,6 @@ class LlamaCppConfig(BaseModel):
     host: str = Field(default="0.0.0.0", description="Host to bind to")
     port: Optional[int] = Field(
         default=None, description="Port (auto-assigned if not specified)"
-    )
-    api_key: Optional[str] = Field(
-        default=None,
-        description="API key for this instance (defaults to host API key if not set)",
     )
     special: bool = Field(
         default=False, description="Enable llama-server --special flag"

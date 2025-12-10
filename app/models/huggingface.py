@@ -1,13 +1,28 @@
 """HuggingFace backend configuration models."""
 
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Literal
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+from typing import Optional, List, Literal, Any
+
+
+def _strip_api_key(data: Any) -> Any:
+    """Remove api_key from old configs - instances use host API key."""
+    if isinstance(data, dict):
+        data.pop("api_key", None)
+    return data
 
 
 class HuggingFaceCausalConfig(BaseModel):
-    """Configuration for a HuggingFace AutoModelForCausalLM instance."""
+    """Configuration for a HuggingFace AutoModelForCausalLM instance.
+    
+    Note: api_key is NOT a config parameter - instances always use the host's API key.
+    """
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_api_key(cls, data: Any) -> Any:
+        return _strip_api_key(data)
 
     backend_type: Literal["huggingface_causal"] = Field(
         default="huggingface_causal", description="Backend type identifier"
@@ -34,16 +49,20 @@ class HuggingFaceCausalConfig(BaseModel):
     port: Optional[int] = Field(
         default=None, description="Port (auto-assigned if not specified)"
     )
-    api_key: Optional[str] = Field(
-        default=None,
-        description="API key for this instance (defaults to host API key if not set)",
-    )
 
 
 class HuggingFaceClassificationConfig(BaseModel):
-    """Configuration for a HuggingFace AutoModelForSequenceClassification instance."""
+    """Configuration for a HuggingFace AutoModelForSequenceClassification instance.
+    
+    Note: api_key is NOT a config parameter - instances always use the host's API key.
+    """
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_api_key(cls, data: Any) -> Any:
+        return _strip_api_key(data)
 
     backend_type: Literal["huggingface_classification"] = Field(
         default="huggingface_classification", description="Backend type identifier"
@@ -69,16 +88,20 @@ class HuggingFaceClassificationConfig(BaseModel):
     port: Optional[int] = Field(
         default=None, description="Port (auto-assigned if not specified)"
     )
-    api_key: Optional[str] = Field(
-        default=None,
-        description="API key for this instance (defaults to host API key if not set)",
-    )
 
 
 class HuggingFaceEmbeddingConfig(BaseModel):
-    """Configuration for a HuggingFace embedding model instance using AutoModel."""
+    """Configuration for a HuggingFace embedding model instance using AutoModel.
+    
+    Note: api_key is NOT a config parameter - instances always use the host's API key.
+    """
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_api_key(cls, data: Any) -> Any:
+        return _strip_api_key(data)
 
     backend_type: Literal["huggingface_embedding"] = Field(
         default="huggingface_embedding", description="Backend type identifier"
@@ -106,8 +129,4 @@ class HuggingFaceEmbeddingConfig(BaseModel):
     host: str = Field(default="0.0.0.0", description="Host to bind to")
     port: Optional[int] = Field(
         default=None, description="Port (auto-assigned if not specified)"
-    )
-    api_key: Optional[str] = Field(
-        default=None,
-        description="API key for this instance (defaults to host API key if not set)",
     )
