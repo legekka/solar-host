@@ -6,6 +6,7 @@ from typing import List, Optional, Any, Dict
 
 from app.backends.base import BackendRunner, RuntimeStateUpdate
 from app.models.base import InstancePhase, GenerationMetrics, BackendType
+from app.config import settings
 
 
 class HuggingFaceRunner(BackendRunner):
@@ -67,7 +68,7 @@ class HuggingFaceRunner(BackendRunner):
             "--port",
             str(instance.port),
             "--api-key",
-            config.api_key,
+            config.api_key or settings.api_key,
             "--device",
             config.device,
             "--dtype",

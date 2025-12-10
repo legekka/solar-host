@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.backends.base import BackendRunner, RuntimeStateUpdate
 from app.models.base import InstancePhase, GenerationMetrics
+from app.config import settings
 
 
 class LlamaCppRunner(BackendRunner):
@@ -71,7 +72,7 @@ class LlamaCppRunner(BackendRunner):
             "--port",
             str(instance.port),
             "--api-key",
-            config.api_key,
+            config.api_key or settings.api_key,
             "--no-warmup",
         ]
 

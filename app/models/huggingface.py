@@ -34,7 +34,10 @@ class HuggingFaceCausalConfig(BaseModel):
     port: Optional[int] = Field(
         default=None, description="Port (auto-assigned if not specified)"
     )
-    api_key: str = Field(..., description="API key for this instance")
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for this instance (defaults to host API key if not set)",
+    )
 
 
 class HuggingFaceClassificationConfig(BaseModel):
@@ -66,7 +69,10 @@ class HuggingFaceClassificationConfig(BaseModel):
     port: Optional[int] = Field(
         default=None, description="Port (auto-assigned if not specified)"
     )
-    api_key: str = Field(..., description="API key for this instance")
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for this instance (defaults to host API key if not set)",
+    )
 
 
 class HuggingFaceEmbeddingConfig(BaseModel):
@@ -101,4 +107,7 @@ class HuggingFaceEmbeddingConfig(BaseModel):
     port: Optional[int] = Field(
         default=None, description="Port (auto-assigned if not specified)"
     )
-    api_key: str = Field(..., description="API key for this instance")
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for this instance (defaults to host API key if not set)",
+    )
