@@ -24,7 +24,7 @@ from app.config import settings, config_manager, parse_instance_config
 from app.backends.base import BackendRunner
 from app.backends.llamacpp import LlamaCppRunner
 from app.backends.huggingface import HuggingFaceRunner
-from app.ws_client import get_client
+from app.ws_client import get_clients, broadcast_log, broadcast_instance_state, broadcast_instances_update
 
 
 def get_runner_for_config(config) -> BackendRunner:
@@ -158,18 +158,18 @@ class ProcessManager:
             print(f"Error reading logs for {instance_id}: {e}")
 
     def _push_log_event(self, instance_id: str, seq: int, line: str, timestamp: str):
-        """Push a log event to solar-control (thread-safe)."""
+        """Push a log event to all connected solar-controls (thread-safe)."""
         try:
-            client = get_client()
-            if client and client.is_connected:
-                import asyncio
-
-                # Get the main event loop (stored when the app starts)
-                loop = getattr(client, "_main_loop", None)
-                if loop and loop.is_running():
-                    asyncio.run_coroutine_threadsafe(
-                        client.send_log(instance_id, seq, line, timestamp), loop
-                    )
+            clients = get_clients()
+            for client in clients:
+                if client.is_connected:
+                    # Get the main event loop (stored when the app starts)
+                    loop = getattr(client, "_main_loop", None)
+                    if loop and loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            broadcast_log(instance_id, seq, line, timestamp), loop
+                        )
+                        break  # Only need to schedule once, broadcast handles all
         except Exception:
             # Never let WS errors break logging
             pass
@@ -220,33 +220,33 @@ class ProcessManager:
         self._push_state_event(instance_id, state)
 
     def _push_state_event(self, instance_id: str, state: InstanceRuntimeState):
-        """Push an instance state event to solar-control (thread-safe)."""
+        """Push an instance state event to all connected solar-controls (thread-safe)."""
         try:
-            client = get_client()
-            if client and client.is_connected:
-                import asyncio
+            clients = get_clients()
+            for client in clients:
+                if client.is_connected:
+                    state_dict = {
+                        "busy": state.busy,
+                        "phase": state.phase.value if state.phase else None,
+                        "prefill_progress": state.prefill_progress,
+                        "active_slots": state.active_slots,
+                        "slot_id": state.slot_id,
+                        "task_id": state.task_id,
+                        "prefill_prompt_tokens": state.prefill_prompt_tokens,
+                        "generated_tokens": state.generated_tokens,
+                        "decode_tps": state.decode_tps,
+                        "decode_ms_per_token": state.decode_ms_per_token,
+                        "checkpoint_index": state.checkpoint_index,
+                        "checkpoint_total": state.checkpoint_total,
+                    }
 
-                state_dict = {
-                    "busy": state.busy,
-                    "phase": state.phase.value if state.phase else None,
-                    "prefill_progress": state.prefill_progress,
-                    "active_slots": state.active_slots,
-                    "slot_id": state.slot_id,
-                    "task_id": state.task_id,
-                    "prefill_prompt_tokens": state.prefill_prompt_tokens,
-                    "generated_tokens": state.generated_tokens,
-                    "decode_tps": state.decode_tps,
-                    "decode_ms_per_token": state.decode_ms_per_token,
-                    "checkpoint_index": state.checkpoint_index,
-                    "checkpoint_total": state.checkpoint_total,
-                }
-
-                # Get the main event loop (stored when the app starts)
-                loop = getattr(client, "_main_loop", None)
-                if loop and loop.is_running():
-                    asyncio.run_coroutine_threadsafe(
-                        client.send_instance_state(instance_id, state_dict), loop
-                    )
+                    # Get the main event loop (stored when the app starts)
+                    loop = getattr(client, "_main_loop", None)
+                    if loop and loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            broadcast_instance_state(instance_id, state_dict), loop
+                        )
+                        break  # Only need to schedule once, broadcast handles all
         except Exception:
             # Never let WS errors break state emission
             pass
@@ -502,18 +502,18 @@ class ProcessManager:
         return self.state_sequences.get(instance_id, 0)
 
     def _push_instances_update(self):
-        """Push instance list update to solar-control (thread-safe)."""
+        """Push instance list update to all connected solar-controls (thread-safe)."""
         try:
-            client = get_client()
-            if client and client.is_connected:
-                import asyncio
-
-                # Get the main event loop (stored when the app starts)
-                loop = getattr(client, "_main_loop", None)
-                if loop and loop.is_running():
-                    asyncio.run_coroutine_threadsafe(
-                        client.send_instances_update(), loop
-                    )
+            clients = get_clients()
+            for client in clients:
+                if client.is_connected:
+                    # Get the main event loop (stored when the app starts)
+                    loop = getattr(client, "_main_loop", None)
+                    if loop and loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            broadcast_instances_update(), loop
+                        )
+                        break  # Only need to schedule once, broadcast handles all
         except Exception:
             # Never let WS errors break instance operations
             pass

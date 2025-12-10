@@ -11,7 +11,7 @@ handling:
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from collections import deque
 from enum import Enum
 
@@ -387,38 +387,88 @@ class SolarControlClient:
         await self.send_event(event)
 
 
-# Global client instance (initialized in main.py)
-solar_control_client: Optional[SolarControlClient] = None
+# Global client instances (initialized in main.py)
+# Supports multiple solar-control connections for dev/uat/prod environments
+solar_control_clients: List[SolarControlClient] = []
+
+
+def get_clients() -> List[SolarControlClient]:
+    """Get all solar-control clients."""
+    return solar_control_clients
 
 
 def get_client() -> Optional[SolarControlClient]:
-    """Get the global solar-control client."""
-    return solar_control_client
+    """Get the first connected solar-control client (legacy compatibility)."""
+    for client in solar_control_clients:
+        if client.is_connected:
+            return client
+    return solar_control_clients[0] if solar_control_clients else None
 
 
-def init_client(settings) -> Optional[SolarControlClient]:
-    """Initialize the global solar-control client from settings.
+def init_clients(settings) -> List[SolarControlClient]:
+    """Initialize solar-control clients from settings.
 
-    The host identifies itself to solar-control using its API key.
-    Solar-control will look up which registered host has this API key.
+    Supports comma-separated URLs for connecting to multiple solar-controls.
+    The host identifies itself to each solar-control using its API key.
     """
-    global solar_control_client
+    global solar_control_clients
 
     if not settings.solar_control_url:
         print("SolarControlClient: SOLAR_CONTROL_URL not configured")
-        return None
+        return []
 
     if not settings.api_key:
         print("SolarControlClient: API_KEY not configured")
-        return None
+        return []
 
-    solar_control_client = SolarControlClient(
-        control_url=settings.solar_control_url,
-        api_key=settings.api_key,  # Host's own API key, used for identification
-        host_name=settings.host_name,
-        reconnect_delay=settings.ws_reconnect_delay,
-        max_reconnect_delay=settings.ws_reconnect_max_delay,
-        ping_interval=settings.ws_ping_interval,
-    )
+    # Parse comma-separated URLs
+    urls = [url.strip() for url in settings.solar_control_url.split(",") if url.strip()]
 
-    return solar_control_client
+    if not urls:
+        print("SolarControlClient: No valid URLs found")
+        return []
+
+    solar_control_clients = []
+    for url in urls:
+        client = SolarControlClient(
+            control_url=url,
+            api_key=settings.api_key,
+            host_name=settings.host_name,
+            reconnect_delay=settings.ws_reconnect_delay,
+            max_reconnect_delay=settings.ws_reconnect_max_delay,
+            ping_interval=settings.ws_ping_interval,
+        )
+        solar_control_clients.append(client)
+
+    print(f"SolarControlClient: Configured {len(solar_control_clients)} connection(s)")
+    return solar_control_clients
+
+
+async def broadcast_log(
+    instance_id: str,
+    seq: int,
+    line: str,
+    timestamp: Optional[str] = None,
+    level: str = "info",
+):
+    """Send a log message to all connected solar-controls."""
+    for client in solar_control_clients:
+        await client.send_log(instance_id, seq, line, timestamp, level)
+
+
+async def broadcast_instance_state(instance_id: str, state: Dict[str, Any]):
+    """Send instance state update to all connected solar-controls."""
+    for client in solar_control_clients:
+        await client.send_instance_state(instance_id, state)
+
+
+async def broadcast_health(memory: Optional[Dict[str, Any]] = None):
+    """Send health update to all connected solar-controls."""
+    for client in solar_control_clients:
+        await client.send_health(memory)
+
+
+async def broadcast_instances_update():
+    """Send instance list update to all connected solar-controls."""
+    for client in solar_control_clients:
+        await client.send_instances_update()

@@ -27,8 +27,10 @@ class Settings(BaseSettings):
     log_buffer_size: int = 1000
 
     # Solar-control connection settings (WebSocket 2.0)
-    # URL to solar-control's host channel endpoint (e.g., "ws://localhost:8000/ws/host-channel")
-    solar_control_url: str = ""
+    # URL(s) to solar-control's host channel endpoint
+    # Single: "ws://localhost:8000/ws/host-channel"
+    # Multiple: "ws://dev:8000/ws/host-channel,ws://prod:8000/ws/host-channel"
+    solar_control_url: str = ""  # Supports comma-separated URLs for multi-control
     # Human-readable host name (optional, for display in webui)
     host_name: str = ""
     ws_reconnect_delay: float = 1.0  # Initial reconnect delay in seconds
