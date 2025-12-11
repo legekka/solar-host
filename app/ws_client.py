@@ -222,7 +222,7 @@ class SolarControlClient:
         if not self._ws:
             return
 
-        # Get current instances info
+        # Get current instances info (include all fields needed for routing)
         from app.config import config_manager
 
         instances = []
@@ -233,6 +233,10 @@ class SolarControlClient:
                     "alias": instance.config.alias,
                     "status": instance.status.value,
                     "port": instance.port,
+                    "supported_endpoints": instance.supported_endpoints,
+                    "backend_type": getattr(
+                        instance.config, "backend_type", "llamacpp"
+                    ),
                 }
             )
 
