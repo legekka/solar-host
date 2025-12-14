@@ -84,16 +84,39 @@ class LlamaCppRunner(BackendRunner):
         if getattr(config, "special", False):
             cmd.append("--special")
 
+        ot_value = getattr(config, "ot", None)
+        if ot_value and ot_value.strip():
+            cmd.extend(["-ot", ot_value])
+
+        # Model type flags
+        model_type = getattr(config, "model_type", "llm")
+        if model_type == "embedding":
+            cmd.append("--embedding")
+        elif model_type == "reranker":
+            cmd.append("--rerank")
+
+        # Pooling flag (only valid for embedding models)
+        if model_type == "embedding":
+            pooling = getattr(config, "pooling", None)
+            if pooling and pooling.strip():
+                cmd.extend(["--pooling", pooling])
+
         return cmd
 
     def get_health_endpoint(self) -> str:
         return "/health"
 
     def get_supported_endpoints(self) -> List[str]:
+        """Get supported endpoints (default - all possible endpoints)."""
+        # Return all possible endpoints - the actual endpoints will be
+        # determined by the llama.cpp server based on flags (--embedding, --rerank)
+        # The process manager will call get_supported_endpoints_for_type if available
         return [
             "/v1/chat/completions",
             "/v1/completions",
             "/v1/models",
+            "/v1/embeddings",
+            "/v1/rerank",
         ]
 
     def initialize_context(self) -> Dict[str, Any]:
@@ -248,7 +271,7 @@ class LlamaCppRunner(BackendRunner):
             # Update pending metrics for last active slot
             last_slot_id = last_state.get("slot_id")
             if isinstance(last_slot_id, int):
-                pending = pending_by_slot.get(last_slot_id) or {"slot_id": last_slot_id}
+                pending: dict[str, Any] = pending_by_slot.get(last_slot_id) or {"slot_id": last_slot_id}
                 if gen_tokens is not None:
                     pending["generated_tokens"] = gen_tokens
                 if tps is not None:
