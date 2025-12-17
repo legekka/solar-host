@@ -40,3 +40,12 @@ class LlamaCppConfig(BaseModel):
     special: bool = Field(
         default=False, description="Enable llama-server --special flag"
     )
+    ot: Optional[str] = Field(
+        default=None, description="Override tensor string (passed as -ot flag to llama-server)"
+    )
+    model_type: Optional[Literal["llm", "embedding", "reranker"]] = Field(
+        default="llm", description="Model type: llm (default), embedding, or reranker"
+    )
+    pooling: Optional[Literal["none", "mean", "cls", "last", "rank"]] = Field(
+        default=None, description="Pooling strategy for embedding models (only valid when model_type is embedding)"
+    )

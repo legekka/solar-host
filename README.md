@@ -244,6 +244,9 @@ All requests require an `X-API-Key` header with your configured API key from the
 | `ctx_size` | No | 131072 | Context window size |
 | `chat_template_file` | No | - | Path to Jinja chat template file |
 | `special` | No | false | Enable llama-server `--special` flag |
+| `ot` | No | - | Override tensor string (passed as `-ot` flag to llama-server) |
+| `model_type` | No | `"llm"` | Model type: `"llm"`, `"embedding"`, or `"reranker"` |
+| `pooling` | No | - | Pooling strategy for embedding models: `"none"`, `"mean"`, `"cls"`, `"last"`, `"rank"` (only valid when `model_type` is `"embedding"`) |
 | `host` | No | "0.0.0.0" | Host to bind to |
 | `port` | No | auto | Port (auto-assigned if not specified) |
 | `api_key` | Yes | - | API key for this instance |
